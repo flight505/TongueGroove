@@ -193,9 +193,24 @@ class TGCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 'val_vclear', 'Depth Clearance', 'mm',
                 adsk.core.ValueInput.createByString('0.15 mm'))
 
+            # ---- End Gaps ----
+            inputs.addTextBoxCommandInput('sep_gaps', '', '<b>End Gaps</b>', 1, True)
+
+            dd = inputs.addDropDownCommandInput(
+                'dd_gap_mode', 'Apply To',
+                adsk.core.DropDownStyles.TextListDropDownStyle)
+            dd.listItems.add('Both ends', True)
+            dd.listItems.add('Start only', False)
+            dd.listItems.add('End only', False)
+            dd.listItems.add('None', False)
+
             inputs.addValueInput(
-                'val_end_clear', 'End Clearance (each end)', 'mm',
+                'val_tongue_gap', 'Tongue Gap (per end)', 'mm',
                 adsk.core.ValueInput.createByString('0.2 mm'))
+
+            inputs.addValueInput(
+                'val_groove_gap', 'Groove Gap (per end)', 'mm',
+                adsk.core.ValueInput.createByString('0 mm'))
 
             # ---- Options ----
             inputs.addTextBoxCommandInput('sep3', '', '<b>Options</b>', 1, True)
@@ -212,10 +227,6 @@ class TGCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
             inputs.addValueInput(
                 'val_fillet', 'Fillet Radius', 'mm',
                 adsk.core.ValueInput.createByString('0.2 mm')).isVisible = False
-
-            inputs.addValueInput(
-                'val_end_inset', 'End Inset (each side)', 'mm',
-                adsk.core.ValueInput.createByString('0 mm'))
 
             # ---- Connect sub-handlers ----
             on_input_changed = TGInputChangedHandler()
@@ -290,9 +301,9 @@ class TGValidateInputsHandler(adsk.core.ValidateInputsEventHandler):
                 ok = (val_width.value > 0 and val_height.value > 0)
 
             if ok:
-                # End inset must not consume more than half the path
-                val_inset = adsk.core.ValueCommandInput.cast(inputs.itemById('val_end_inset'))
-                if val_inset.value < 0:
+                val_tg = adsk.core.ValueCommandInput.cast(inputs.itemById('val_tongue_gap'))
+                val_gg = adsk.core.ValueCommandInput.cast(inputs.itemById('val_groove_gap'))
+                if val_tg.value < 0 or val_gg.value < 0:
                     ok = False
 
             event_args.areInputsValid = ok
@@ -345,12 +356,16 @@ def _generate(inputs: adsk.core.CommandInputs, preview: bool):
     tongue_body = adsk.fusion.BRepBody.cast(tongue_sel.selection(0).entity)
     groove_body = adsk.fusion.BRepBody.cast(groove_sel.selection(0).entity)
 
-    width_cm     = adsk.core.ValueCommandInput.cast(inputs.itemById('val_width')).value
-    height_cm    = adsk.core.ValueCommandInput.cast(inputs.itemById('val_height')).value
-    clear_cm     = adsk.core.ValueCommandInput.cast(inputs.itemById('val_clearance')).value
-    vclear_cm    = adsk.core.ValueCommandInput.cast(inputs.itemById('val_vclear')).value
-    end_clear_cm = adsk.core.ValueCommandInput.cast(inputs.itemById('val_end_clear')).value
-    end_inset_cm = adsk.core.ValueCommandInput.cast(inputs.itemById('val_end_inset')).value
+    width_cm   = adsk.core.ValueCommandInput.cast(inputs.itemById('val_width')).value
+    height_cm  = adsk.core.ValueCommandInput.cast(inputs.itemById('val_height')).value
+    clear_cm   = adsk.core.ValueCommandInput.cast(inputs.itemById('val_clearance')).value
+    vclear_cm  = adsk.core.ValueCommandInput.cast(inputs.itemById('val_vclear')).value
+
+    # End gaps
+    gap_mode_dd = adsk.core.DropDownCommandInput.cast(inputs.itemById('dd_gap_mode'))
+    gap_mode = gap_mode_dd.selectedItem.name   # 'Both ends', 'Start only', 'End only', 'None'
+    tongue_gap_cm = adsk.core.ValueCommandInput.cast(inputs.itemById('val_tongue_gap')).value
+    groove_gap_cm = adsk.core.ValueCommandInput.cast(inputs.itemById('val_groove_gap')).value
 
     do_chamfer = adsk.core.BoolValueCommandInput.cast(inputs.itemById('bool_chamfer')).value
     chamfer_cm = adsk.core.ValueCommandInput.cast(inputs.itemById('val_chamfer')).value if do_chamfer else 0.0
@@ -358,12 +373,7 @@ def _generate(inputs: adsk.core.CommandInputs, preview: bool):
 
     if do_fillet:
         fillet_input = adsk.core.ValueCommandInput.cast(inputs.itemById('val_fillet'))
-        if fillet_input.isVisible and fillet_input.value > 0:
-            fillet_cm = fillet_input.value
-        else:
-            height_mm = height_cm * 10.0
-            fillet_cm = max(0.02, min(0.04, height_mm * 0.001))
-        fillet_cm = fillet_input.value if fillet_input.isVisible else fillet_cm
+        fillet_cm = fillet_input.value if fillet_input.isVisible and fillet_input.value > 0 else 0.02
     else:
         fillet_cm = 0.0
 
@@ -376,46 +386,63 @@ def _generate(inputs: adsk.core.CommandInputs, preview: bool):
 
     sketch = path_curves[0].parentSketch
 
-    # ---- Compute path length and validate ----
+    # ---- Compute path length ----
     total_len = sum(c.length for c in path_curves)
-    min_required = 2.0 * (end_inset_cm + end_clear_cm) + width_cm * 0.1
-    if total_len < min_required:
-        raise ValueError(
-            f'Path too short ({total_len * 10:.1f} mm) for the requested '
-            f'end inset + clearance. Reduce inset or use a longer path.')
+
+    # ---- Resolve gap mode into start/end fractions ----
+    # Tongue: gap = tongue_gap + groove_gap (tongue must be shorter than groove)
+    # Groove: gap = groove_gap only
+    def _fracs(gap_cm):
+        """Convert absolute gap (cm) to start_frac and end_frac based on mode."""
+        f = gap_cm / total_len if total_len > 0 and gap_cm > 0 else 0
+        if gap_mode == 'Both ends':
+            return f, f
+        elif gap_mode == 'Start only':
+            return f, 0.0
+        elif gap_mode == 'End only':
+            return 0.0, f
+        else:  # 'None'
+            return 0.0, 0.0
+
+    tongue_total_gap = tongue_gap_cm + groove_gap_cm
+    tongue_start, tongue_end = _fracs(tongue_total_gap)
+    groove_start, groove_end = _fracs(groove_gap_cm)
+
+    # Validate
+    if (1.0 - tongue_start - tongue_end) < 0.01:
+        raise ValueError('Tongue gap too large for path length.')
 
     # ---- Create sweep path ----
     sweep_path = _create_sweep_path(path_curves)
     if sweep_path is None:
         raise RuntimeError('Failed to create sweep path from selected curves.')
 
-    # ---- Get face normal for profile orientation ----
     face_normal = _get_face_normal(sketch)
 
     # ---- Build Tongue ----
-    tongue_inset_frac = (end_inset_cm + end_clear_cm) / total_len
+    app.log(f'{CMD_NAME}: tongue start_frac={tongue_start:.4f} end_frac={tongue_end:.4f}')
     tongue_feat = _sweep_joint(
         root, sweep_path, face_normal,
         half_width=width_cm / 2.0,
         height=height_cm,
         body=tongue_body,
         operation=adsk.fusion.FeatureOperations.JoinFeatureOperation,
-        start_frac=tongue_inset_frac,
-        end_frac=tongue_inset_frac)
+        start_frac=tongue_start,
+        end_frac=tongue_end)
 
     if chamfer_cm > 0 and tongue_feat:
         _chamfer_sweep_top(root, tongue_feat, chamfer_cm)
 
     # ---- Build Groove ----
-    groove_inset_frac = end_inset_cm / total_len if end_inset_cm > 0 else 0
+    app.log(f'{CMD_NAME}: groove start_frac={groove_start:.4f} end_frac={groove_end:.4f}')
     groove_feat = _sweep_joint(
         root, sweep_path, face_normal,
         half_width=width_cm / 2.0 + clear_cm,
         height=height_cm + vclear_cm,
         body=groove_body,
         operation=adsk.fusion.FeatureOperations.CutFeatureOperation,
-        start_frac=groove_inset_frac,
-        end_frac=groove_inset_frac)
+        start_frac=groove_start,
+        end_frac=groove_end)
 
     if do_fillet and fillet_cm > 0 and groove_feat:
         _fillet_groove_corners(root, groove_feat, fillet_cm)
@@ -495,16 +522,21 @@ def _sweep_joint(root, sweep_path, face_normal,
     sweep_input.orientation = adsk.fusion.SweepOrientationTypes.PerpendicularOrientationType
     sweep_input.participantBodies = [body]
 
-    # distanceOne is a 0..1 fraction of the path AHEAD of the profile.
-    # 1.0 = sweep all the way to path end (default).
-    # Profile is at start_frac; path ahead = (1.0 - start_frac).
-    # We want to stop at (1.0 - end_frac), so the fraction of the
-    # forward path we need is: sweep_range / (1.0 - start_frac).
+    # distanceOne: 0..1 fraction of path ahead of profile.
+    # Profile at start_frac; remaining forward = (1 - start_frac).
+    # We want sweep to stop at absolute position (1 - end_frac).
+    # So fraction of forward path = sweep_range / (1 - start_frac).
+    app = adsk.core.Application.get()
     if end_frac > 0.001:
         forward_available = 1.0 - start_frac
         d1 = sweep_range / forward_available if forward_available > 0.01 else 1.0
-        sweep_input.distanceOne = vi_real(min(d1, 1.0))
-    # else: distanceOne defaults to 1.0 (full forward sweep), which is correct
+        d1 = min(d1, 1.0)
+    else:
+        d1 = 1.0
+    sweep_input.distanceOne = vi_real(d1)
+
+    app.log(f'{CMD_NAME}: sweep start_frac={start_frac:.4f} end_frac={end_frac:.4f} '
+            f'd1={d1:.4f} sweep_range={sweep_range:.4f}')
 
     sweep_feat = sweeps.add(sweep_input)
 
