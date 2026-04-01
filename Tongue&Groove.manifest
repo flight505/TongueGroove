@@ -1,0 +1,12 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"addin",
+	"author":	"flight505",
+	"description":	{
+		"":	"Create Tongue & Groove joints between two bodies with 3D-printing tolerances."
+	},
+	"version":	"2.0.0",
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"ScriptIcon.svg"
+}
