@@ -434,14 +434,11 @@ def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
         extrudes = root.features.extrudeFeatures
         ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.CutFeatureOperation)
 
-        # Extrude through-all in the direction toward the endpoint
-        all_extent = adsk.fusion.AllExtentDefinition.create()
-        if toward_start:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.NegativeExtentDirection)
-        else:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        # ThroughAllExtentDefinition (NOT AllExtentDefinition) for one-sided through-all
+        through_all = adsk.fusion.ThroughAllExtentDefinition.create()
+        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
+                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        ext_input.setOneSideExtent(through_all, direction)
 
         ext_input.participantBodies = [body]
         extrudes.add(ext_input)
@@ -477,13 +474,10 @@ def _fill_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
         extrudes = root.features.extrudeFeatures
         ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.JoinFeatureOperation)
 
-        all_extent = adsk.fusion.AllExtentDefinition.create()
-        if toward_start:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.NegativeExtentDirection)
-        else:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        through_all = adsk.fusion.ThroughAllExtentDefinition.create()
+        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
+                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        ext_input.setOneSideExtent(through_all, direction)
 
         ext_input.participantBodies = [body]
         extrudes.add(ext_input)
