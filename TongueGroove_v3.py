@@ -502,37 +502,62 @@ def _trim_ends(root, path, face_normal, half_w, h, body,
         frac = start_gap_cm / total_len
         _log(f'Trim tongue start: gap={start_gap_cm * 10:.2f}mm → frac={frac:.4f} '
              f'(absolute={frac * total_len * 10:.2f}mm from start)')
-        _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=True)
+        _trim_one_end(root, path, face_normal, half_w, h, body, frac,
+                      toward_start=True, total_len=total_len)
 
     if end_gap_cm > 0:
         frac = 1.0 - (end_gap_cm / total_len)
         _log(f'Trim tongue end: gap={end_gap_cm * 10:.2f}mm → frac={frac:.4f} '
              f'(absolute={(1.0 - frac) * total_len * 10:.2f}mm from end)')
-        _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=False)
+        _trim_one_end(root, path, face_normal, half_w, h, body, frac,
+                      toward_start=False, total_len=total_len)
 
 
-def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
-    """Extrude-cut from the trim plane toward the nearest path endpoint."""
+def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start, total_len):
+    """Cut away tongue material between the trim plane and the path endpoint.
+
+    The trim plane is perpendicular to the path at `frac`. We extrude the
+    tongue cross-section from this plane toward the nearest path endpoint.
+
+    The extrude distance = gap size (the distance from trim plane to endpoint).
+    Direction: Negative (toward start) or Positive (toward end) relative to
+    the construction plane normal (which is the path tangent at that point).
+    """
     try:
         side = 'START' if toward_start else 'END'
-        _log(f'Trim {side}: plane at frac={frac:.4f}, direction={"Negative" if toward_start else "Positive"}')
+        # The gap distance in cm
+        if toward_start:
+            gap_cm = frac * total_len
+        else:
+            gap_cm = (1.0 - frac) * total_len
+
+        _log(f'Trim {side}: frac={frac:.4f}, gap={gap_cm * 10:.2f}mm')
+
         plane = _make_profile_plane(root, path, frac)
-        _, prof = _draw_rect(root, plane, face_normal, half_w, h)
+        # Slightly oversized profile to ensure full coverage of the tongue
+        _, prof = _draw_rect(root, plane, face_normal, half_w * 1.5, h * 1.5)
         if prof is None:
-            _log('Trim: no profile created')
+            _log(f'Trim {side}: no profile created')
             return
 
         extrudes = root.features.extrudeFeatures
         ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.CutFeatureOperation)
 
-        # ThroughAllExtentDefinition (NOT AllExtentDefinition) for one-sided through-all
-        through_all = adsk.fusion.ThroughAllExtentDefinition.create()
+        # Extrude by gap distance + margin, toward the path endpoint.
+        # Add 50% margin to guarantee full coverage.
+        cut_dist = gap_cm * 1.5 + 0.1  # cm, with margin
         direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
                      else adsk.fusion.ExtentDirections.PositiveExtentDirection)
-        ext_input.setOneSideExtent(through_all, direction)
 
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(cut_dist))
+        ext_input.setOneSideExtent(dist_def, direction)
         ext_input.participantBodies = [body]
-        extrudes.add(ext_input)
+
+        feat = extrudes.add(ext_input)
+        if feat:
+            _log(f'Trim {side}: cut succeeded (dist={cut_dist * 10:.2f}mm)')
+        else:
+            _log(f'Trim {side}: extrude returned null')
     except:
         _log(f'Trim cut failed (non-critical):\n{traceback.format_exc()}')
 
