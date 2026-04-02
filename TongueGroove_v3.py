@@ -262,8 +262,11 @@ def _generate(inputs):
     if not curves:
         raise ValueError('No path curves selected.')
 
-    sketch    = curves[0].parentSketch
-    total_len = sum(c.length for c in curves)
+    sketch = curves[0].parentSketch
+
+    # Get all connected curves for accurate total length
+    all_connected = sketch.findConnectedCurves(curves[0])
+    total_len = sum(all_connected.item(i).length for i in range(all_connected.count))
 
     # Resolve gap mode → per-end gap distances (cm)
     def _gap(gap_cm):
@@ -301,20 +304,18 @@ def _generate(inputs):
         _chamfer_top(root, tongue_feat, chamfer_cm)
 
     # ---- GROOVE ----
-    groove_feat = _full_sweep(
+    # For groove (Cut), profile placement works for the start gap because
+    # the cut simply doesn't happen before the profile. No fill needed.
+    g_start_frac = g_start / total_len if g_start > 0 else 0.0
+    g_end_frac   = g_end / total_len if g_end > 0 else 0.0
+    groove_feat = _partial_sweep(
         root, sweep_path, face_normal,
         half_w=width_cm / 2.0 + lat_clear_cm,
         h=height_cm + depth_clear_cm,
         body=groove_body,
-        op=adsk.fusion.FeatureOperations.CutFeatureOperation)
-
-    if g_start > 0 or g_end > 0:
-        _trim_groove_ends(root, sweep_path, face_normal,
-                          half_w=width_cm / 2.0 + lat_clear_cm,
-                          h=height_cm + depth_clear_cm,
-                          body=groove_body,
-                          start_gap_cm=g_start, end_gap_cm=g_end,
-                          total_len=total_len)
+        op=adsk.fusion.FeatureOperations.CutFeatureOperation,
+        start_frac=g_start_frac,
+        end_frac=g_end_frac)
 
     if fillet_cm > 0 and groove_feat:
         _fillet_corners(root, groove_feat, fillet_cm)
@@ -324,14 +325,23 @@ def _generate(inputs):
 # Path + geometry
 # ---------------------------------------------------------------------------
 def _make_path(curves):
-    """Create sweep Path from selected SketchCurves."""
-    if len(curves) == 1:
+    """Create sweep Path from selected SketchCurves.
+
+    Always uses findConnectedCurves from the first selected curve to get
+    the full connected path, regardless of how many curves the user clicked.
+    This matches Fusion's native sweep behavior.
+    """
+    sketch = curves[0].parentSketch
+    connected = sketch.findConnectedCurves(curves[0])
+
+    # findConnectedCurves returns an ObjectCollection in connected order
+    if connected.count == 1:
         return adsk.fusion.Path.create(
-            curves[0], adsk.fusion.ChainedCurveOptions.connectedChainedCurves)
-    col = adsk.core.ObjectCollection.create()
-    for c in curves:
-        col.add(c)
-    return adsk.fusion.Path.create(col, adsk.fusion.ChainedCurveOptions.noChainedCurves)
+            connected.item(0),
+            adsk.fusion.ChainedCurveOptions.connectedChainedCurves)
+    return adsk.fusion.Path.create(
+        connected,
+        adsk.fusion.ChainedCurveOptions.noChainedCurves)
 
 
 def _face_normal(sketch):
@@ -400,8 +410,41 @@ def _full_sweep(root, path, face_normal, half_w, h, body, op):
     return feat
 
 
+def _partial_sweep(root, path, face_normal, half_w, h, body, op,
+                   start_frac=0.0, end_frac=0.0):
+    """Create a sweep that starts at start_frac and clips the end at end_frac.
+
+    For Cut operations, profile placement reliably clips the start because
+    the cut simply doesn't happen where the sweep hasn't reached.
+    distanceOne clips the end.
+    """
+    plane = _make_profile_plane(root, path, start_frac)
+    _, prof = _draw_rect(root, plane, face_normal, half_w, h)
+    if prof is None:
+        raise RuntimeError('Failed to create sweep profile.')
+
+    sweeps = root.features.sweepFeatures
+    si = sweeps.createInput(prof, path, op)
+    si.orientation = adsk.fusion.SweepOrientationTypes.PerpendicularOrientationType
+    si.participantBodies = [body]
+
+    # distanceOne clips the far end — fraction of forward-available path
+    if end_frac > 0.001:
+        sweep_range = 1.0 - start_frac - end_frac
+        forward = 1.0 - start_frac
+        d1 = sweep_range / forward if forward > 0.01 else 1.0
+        si.distanceOne = _vi(min(d1, 1.0))
+
+    feat = sweeps.add(si)
+    if feat is None:
+        raise RuntimeError('Partial sweep returned null.')
+    if feat.healthState == adsk.fusion.FeatureHealthStates.ErrorFeatureHealthState:
+        raise RuntimeError(f'Partial sweep failed: {feat.errorOrWarningMessage}')
+    return feat
+
+
 # ---------------------------------------------------------------------------
-# End-gap trimming
+# End-gap trimming (tongue only — groove uses _partial_sweep)
 # ---------------------------------------------------------------------------
 def _trim_ends(root, path, face_normal, half_w, h, body,
                start_gap_cm, end_gap_cm, total_len):
@@ -446,43 +489,6 @@ def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
         _log(f'Trim cut failed (non-critical):\n{traceback.format_exc()}')
 
 
-def _trim_groove_ends(root, path, face_normal, half_w, h, body,
-                      start_gap_cm, end_gap_cm, total_len):
-    """Fill back groove material at ends by extruding Joins.
-
-    The groove is a cut. To 'trim' it (make it shorter), we fill back the
-    cut material at the ends by joining material into the groove body.
-    """
-    if start_gap_cm > 0:
-        frac = start_gap_cm / total_len
-        _fill_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=True)
-
-    if end_gap_cm > 0:
-        frac = 1.0 - (end_gap_cm / total_len)
-        _fill_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=False)
-
-
-def _fill_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
-    """Extrude-join from trim plane toward nearest endpoint to fill the groove."""
-    try:
-        plane = _make_profile_plane(root, path, frac)
-        _, prof = _draw_rect(root, plane, face_normal, half_w, h)
-        if prof is None:
-            _log('Fill: no profile created')
-            return
-
-        extrudes = root.features.extrudeFeatures
-        ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.JoinFeatureOperation)
-
-        through_all = adsk.fusion.ThroughAllExtentDefinition.create()
-        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
-                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
-        ext_input.setOneSideExtent(through_all, direction)
-
-        ext_input.participantBodies = [body]
-        extrudes.add(ext_input)
-    except:
-        _log(f'Fill failed (non-critical):\n{traceback.format_exc()}')
 
 
 # ---------------------------------------------------------------------------
