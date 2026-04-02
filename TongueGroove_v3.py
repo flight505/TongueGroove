@@ -264,9 +264,12 @@ def _generate(inputs):
 
     sketch = curves[0].parentSketch
 
-    # Get all connected curves for accurate total length
-    all_connected = sketch.findConnectedCurves(curves[0])
-    total_len = sum(all_connected.item(i).length for i in range(all_connected.count))
+    # Path length must match what _make_path actually uses
+    if len(curves) == 1:
+        all_connected = sketch.findConnectedCurves(curves[0])
+        total_len = sum(all_connected.item(i).length for i in range(all_connected.count))
+    else:
+        total_len = sum(c.length for c in curves)
 
     # Resolve gap mode → per-end gap distances (cm)
     def _gap(gap_cm):
@@ -276,18 +279,47 @@ def _generate(inputs):
         elif gap_mode == 'End only':   return 0.0, gap_cm
         else:                          return 0.0, 0.0
 
-    tongue_total = tongue_gap_cm + groove_gap_cm
-    t_start, t_end = _gap(tongue_total)
+    # Tongue gap and groove gap are independent per-end distances (cm).
+    # Each controls how far that feature pulls back from the path endpoints.
+    t_start, t_end = _gap(tongue_gap_cm)
     g_start, g_end = _gap(groove_gap_cm)
 
+    _log(f'total_len={total_len * 10:.2f}mm  tongue_gap={tongue_gap_cm * 10:.2f}mm  '
+         f'groove_gap={groove_gap_cm * 10:.2f}mm  mode={gap_mode}')
+    _log(f't_start={t_start * 10:.2f}mm  t_end={t_end * 10:.2f}mm  '
+         f'g_start={g_start * 10:.2f}mm  g_end={g_end * 10:.2f}mm')
+
     if t_start + t_end >= total_len * 0.95:
-        raise ValueError('Tongue gaps exceed path length.')
+        raise ValueError(
+            f'Tongue gaps ({(t_start + t_end) * 10:.1f}mm) exceed '
+            f'95% of path length ({total_len * 10:.1f}mm).')
+
+    # ---- Pre-flight validation ----
+    # Check tongue width against body bounding box at the face
+    ref = sketch.referencePlane
+    face = adsk.fusion.BRepFace.cast(ref)
+    if face:
+        bb = face.boundingBox
+        face_width = max(
+            bb.maxPoint.x - bb.minPoint.x,
+            bb.maxPoint.y - bb.minPoint.y,
+            bb.maxPoint.z - bb.minPoint.z)
+        if width_cm > face_width:
+            raise ValueError(
+                f'Tongue width ({width_cm * 10:.1f}mm) exceeds the face '
+                f'dimension ({face_width * 10:.1f}mm). Reduce tongue width.')
+        _log(f'Face bounding box max dimension: {face_width * 10:.1f}mm')
+
+    if chamfer_cm > 0 and chamfer_cm >= height_cm * 0.5:
+        _log(f'WARNING: chamfer ({chamfer_cm * 10:.1f}mm) is >= 50% of tongue height '
+             f'({height_cm * 10:.1f}mm) — may fail')
 
     # Build path + face normal
     sweep_path  = _make_path(curves)
     face_normal = _face_normal(sketch)
 
     # ---- TONGUE ----
+    _log('--- TONGUE ---')
     tongue_feat = _full_sweep(
         root, sweep_path, face_normal,
         half_w=width_cm / 2.0, h=height_cm,
@@ -304,10 +336,10 @@ def _generate(inputs):
         _chamfer_top(root, tongue_feat, chamfer_cm)
 
     # ---- GROOVE ----
-    # For groove (Cut), profile placement works for the start gap because
-    # the cut simply doesn't happen before the profile. No fill needed.
+    _log('--- GROOVE ---')
     g_start_frac = g_start / total_len if g_start > 0 else 0.0
     g_end_frac   = g_end / total_len if g_end > 0 else 0.0
+    _log(f'groove start_frac={g_start_frac:.4f} end_frac={g_end_frac:.4f}')
     groove_feat = _partial_sweep(
         root, sweep_path, face_normal,
         half_w=width_cm / 2.0 + lat_clear_cm,
@@ -327,21 +359,27 @@ def _generate(inputs):
 def _make_path(curves):
     """Create sweep Path from selected SketchCurves.
 
-    Always uses findConnectedCurves from the first selected curve to get
-    the full connected path, regardless of how many curves the user clicked.
-    This matches Fusion's native sweep behavior.
+    If 1 curve selected: findConnectedCurves auto-chains the full path.
+    If 2+ curves selected: uses exactly those curves (user's explicit choice).
     """
-    sketch = curves[0].parentSketch
-    connected = sketch.findConnectedCurves(curves[0])
-
-    # findConnectedCurves returns an ObjectCollection in connected order
-    if connected.count == 1:
+    if len(curves) == 1:
+        sketch = curves[0].parentSketch
+        connected = sketch.findConnectedCurves(curves[0])
+        _log(f'Path: 1 selected → findConnectedCurves found {connected.count} curves')
+        if connected.count == 1:
+            return adsk.fusion.Path.create(
+                connected.item(0),
+                adsk.fusion.ChainedCurveOptions.connectedChainedCurves)
         return adsk.fusion.Path.create(
-            connected.item(0),
-            adsk.fusion.ChainedCurveOptions.connectedChainedCurves)
-    return adsk.fusion.Path.create(
-        connected,
-        adsk.fusion.ChainedCurveOptions.noChainedCurves)
+            connected,
+            adsk.fusion.ChainedCurveOptions.noChainedCurves)
+    else:
+        _log(f'Path: {len(curves)} curves explicitly selected')
+        col = adsk.core.ObjectCollection.create()
+        for c in curves:
+            col.add(c)
+        return adsk.fusion.Path.create(
+            col, adsk.fusion.ChainedCurveOptions.noChainedCurves)
 
 
 def _face_normal(sketch):
@@ -433,7 +471,11 @@ def _partial_sweep(root, path, face_normal, half_w, h, body, op,
         sweep_range = 1.0 - start_frac - end_frac
         forward = 1.0 - start_frac
         d1 = sweep_range / forward if forward > 0.01 else 1.0
-        si.distanceOne = _vi(min(d1, 1.0))
+        d1 = min(d1, 1.0)
+        si.distanceOne = _vi(d1)
+        _log(f'Partial sweep: d1={d1:.4f} (sweep_range={sweep_range:.4f}, forward={forward:.4f})')
+    else:
+        _log(f'Partial sweep: d1=1.0 (full forward, no end clip)')
 
     feat = sweeps.add(si)
     if feat is None:
@@ -458,16 +500,22 @@ def _trim_ends(root, path, face_normal, half_w, h, body,
     """
     if start_gap_cm > 0:
         frac = start_gap_cm / total_len
+        _log(f'Trim tongue start: gap={start_gap_cm * 10:.2f}mm → frac={frac:.4f} '
+             f'(absolute={frac * total_len * 10:.2f}mm from start)')
         _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=True)
 
     if end_gap_cm > 0:
         frac = 1.0 - (end_gap_cm / total_len)
+        _log(f'Trim tongue end: gap={end_gap_cm * 10:.2f}mm → frac={frac:.4f} '
+             f'(absolute={(1.0 - frac) * total_len * 10:.2f}mm from end)')
         _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=False)
 
 
 def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
     """Extrude-cut from the trim plane toward the nearest path endpoint."""
     try:
+        side = 'START' if toward_start else 'END'
+        _log(f'Trim {side}: plane at frac={frac:.4f}, direction={"Negative" if toward_start else "Positive"}')
         plane = _make_profile_plane(root, path, frac)
         _, prof = _draw_rect(root, plane, face_normal, half_w, h)
         if prof is None:
@@ -528,8 +576,23 @@ def _chamfer_top(root, sweep_feat, chamfer_cm):
 
         ch = root.features.chamferFeatures
         ci = ch.createInput2()
-        ci.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edges, _vi(chamfer_cm), True)
-        ch.add(ci)
+        ci.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edges, _vi(chamfer_cm), False)
+        try:
+            ch.add(ci)
+            _log(f'Chamfer applied: {chamfer_cm * 10:.2f}mm on {edges.count} edges')
+        except RuntimeError as e:
+            if 'UNFIN_SHEET' in str(e) or 'Compute Failed' in str(e):
+                _log(f'Chamfer too large ({chamfer_cm * 10:.1f}mm), trying half size...')
+                ci2 = ch.createInput2()
+                ci2.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+                    edges, _vi(chamfer_cm * 0.5), False)
+                try:
+                    ch.add(ci2)
+                    _log(f'Chamfer applied at reduced size: {chamfer_cm * 5:.2f}mm')
+                except:
+                    _log(f'Chamfer failed even at reduced size — skipping')
+            else:
+                raise
     except:
         _log(f'Chamfer failed (non-critical):\n{traceback.format_exc()}')
 
