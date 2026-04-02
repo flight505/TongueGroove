@@ -132,21 +132,21 @@ class _OnCommandCreated(adsk.core.CommandCreatedEventHandler):
             inp.addValueInput('val_width',  'Tongue Width',  'mm', adsk.core.ValueInput.createByString('6 mm'))
             inp.addValueInput('val_height', 'Tongue Height', 'mm', adsk.core.ValueInput.createByString('3 mm'))
 
-            # Tolerances
-            inp.addTextBoxCommandInput('_t', '', '<b>Tolerances</b>', 1, True)
-            inp.addValueInput('val_lat_clear',   'Lateral Clearance (per side)', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
-            inp.addValueInput('val_depth_clear',  'Depth Clearance',             'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            # Fit Clearance
+            inp.addTextBoxCommandInput('_t', '', '<b>Fit Clearance</b>', 1, True)
+            inp.addValueInput('val_side_clear', 'Side Clearance (per side)', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            inp.addValueInput('val_bottom_clear', 'Bottom Clearance', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            inp.addValueInput('val_end_clear', 'End Clearance (per end)', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
 
-            # End gaps
-            inp.addTextBoxCommandInput('_g', '', '<b>End Gaps</b>', 1, True)
-            dd = inp.addDropDownCommandInput('dd_gap_mode', 'Apply To',
+            # Path Inset
+            inp.addTextBoxCommandInput('_g', '', '<b>Path Inset</b>', 1, True)
+            dd = inp.addDropDownCommandInput('dd_inset_mode', 'Apply To',
                                              adsk.core.DropDownStyles.TextListDropDownStyle)
             dd.listItems.add('Both ends', True)
             dd.listItems.add('Start only', False)
             dd.listItems.add('End only', False)
             dd.listItems.add('None', False)
-            inp.addValueInput('val_tongue_gap', 'Tongue Gap (per end)', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
-            inp.addValueInput('val_groove_gap', 'Groove Gap (per end)', 'mm', adsk.core.ValueInput.createByString('0 mm'))
+            inp.addValueInput('val_inset', 'Inset Distance', 'mm', adsk.core.ValueInput.createByString('0 mm'))
 
             # Options
             inp.addTextBoxCommandInput('_o', '', '<b>Options</b>', 1, True)
@@ -195,8 +195,8 @@ class _OnValidate(adsk.core.ValidateInputsEventHandler):
                   adsk.core.SelectionCommandInput.cast(inp.itemById('sel_groove')).selectionCount == 1 and
                   adsk.core.ValueCommandInput.cast(inp.itemById('val_width')).value > 0 and
                   adsk.core.ValueCommandInput.cast(inp.itemById('val_height')).value > 0 and
-                  adsk.core.ValueCommandInput.cast(inp.itemById('val_tongue_gap')).value >= 0 and
-                  adsk.core.ValueCommandInput.cast(inp.itemById('val_groove_gap')).value >= 0)
+                  adsk.core.ValueCommandInput.cast(inp.itemById('val_end_clear')).value >= 0 and
+                  adsk.core.ValueCommandInput.cast(inp.itemById('val_inset')).value >= 0)
             ea.areInputsValid = ok
         except:
             pass
@@ -241,15 +241,15 @@ def _generate(inputs):
         adsk.core.SelectionCommandInput.cast(inputs.itemById('sel_groove')).selection(0).entity)
 
     # Read values
-    width_cm      = _read_val(inputs, 'val_width')
-    height_cm     = _read_val(inputs, 'val_height')
-    lat_clear_cm  = _read_val(inputs, 'val_lat_clear')
-    depth_clear_cm = _read_val(inputs, 'val_depth_clear')
-    tongue_gap_cm = _read_val(inputs, 'val_tongue_gap')
-    groove_gap_cm = _read_val(inputs, 'val_groove_gap')
+    width_cm       = _read_val(inputs, 'val_width')
+    height_cm      = _read_val(inputs, 'val_height')
+    side_clear_cm  = _read_val(inputs, 'val_side_clear')
+    bottom_clear_cm = _read_val(inputs, 'val_bottom_clear')
+    end_clear_cm   = _read_val(inputs, 'val_end_clear')
+    inset_cm       = _read_val(inputs, 'val_inset')
 
-    gap_mode = adsk.core.DropDownCommandInput.cast(
-        inputs.itemById('dd_gap_mode')).selectedItem.name
+    inset_mode = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById('dd_inset_mode')).selectedItem.name
 
     do_chamfer = adsk.core.BoolValueCommandInput.cast(inputs.itemById('bool_chamfer')).value
     chamfer_cm = _read_val(inputs, 'val_chamfer') if do_chamfer else 0.0
@@ -271,27 +271,32 @@ def _generate(inputs):
     else:
         total_len = sum(c.length for c in curves)
 
-    # Resolve gap mode → per-end gap distances (cm)
-    def _gap(gap_cm):
-        """Return (start_gap_cm, end_gap_cm) based on mode."""
-        if gap_mode == 'Both ends':    return gap_cm, gap_cm
-        elif gap_mode == 'Start only': return gap_cm, 0.0
-        elif gap_mode == 'End only':   return 0.0, gap_cm
-        else:                          return 0.0, 0.0
+    # Resolve inset mode → per-end inset distances (cm)
+    # Inset: how far BOTH tongue and groove pull back equally from path endpoints
+    def _per_end(dist_cm):
+        if inset_mode == 'Both ends':    return dist_cm, dist_cm
+        elif inset_mode == 'Start only': return dist_cm, 0.0
+        elif inset_mode == 'End only':   return 0.0, dist_cm
+        else:                            return 0.0, 0.0
 
-    # Tongue gap and groove gap are independent per-end distances (cm).
-    # Each controls how far that feature pulls back from the path endpoints.
-    t_start, t_end = _gap(tongue_gap_cm)
-    g_start, g_end = _gap(groove_gap_cm)
+    inset_start, inset_end = _per_end(inset_cm)
 
-    _log(f'total_len={total_len * 10:.2f}mm  tongue_gap={tongue_gap_cm * 10:.2f}mm  '
-         f'groove_gap={groove_gap_cm * 10:.2f}mm  mode={gap_mode}')
-    _log(f't_start={t_start * 10:.2f}mm  t_end={t_end * 10:.2f}mm  '
-         f'g_start={g_start * 10:.2f}mm  g_end={g_end * 10:.2f}mm')
+    # Tongue pulls back by inset + end_clearance at each active end.
+    # Groove pulls back by inset only. The difference = end_clearance = fit gap.
+    end_clear_start, end_clear_end = _per_end(end_clear_cm)
+    t_start = inset_start + end_clear_start
+    t_end   = inset_end + end_clear_end
+    g_start = inset_start
+    g_end   = inset_end
+
+    _log(f'total_len={total_len * 10:.2f}mm  inset={inset_cm * 10:.2f}mm  '
+         f'end_clear={end_clear_cm * 10:.2f}mm  mode={inset_mode}')
+    _log(f'tongue: start={t_start * 10:.2f}mm  end={t_end * 10:.2f}mm')
+    _log(f'groove: start={g_start * 10:.2f}mm  end={g_end * 10:.2f}mm')
 
     if t_start + t_end >= total_len * 0.95:
         raise ValueError(
-            f'Tongue gaps ({(t_start + t_end) * 10:.1f}mm) exceed '
+            f'Tongue insets ({(t_start + t_end) * 10:.1f}mm) exceed '
             f'95% of path length ({total_len * 10:.1f}mm).')
 
     # ---- Pre-flight validation ----
@@ -342,8 +347,8 @@ def _generate(inputs):
     _log(f'groove start_frac={g_start_frac:.4f} end_frac={g_end_frac:.4f}')
     groove_feat = _partial_sweep(
         root, sweep_path, face_normal,
-        half_w=width_cm / 2.0 + lat_clear_cm,
-        h=height_cm + depth_clear_cm,
+        half_w=width_cm / 2.0 + side_clear_cm,
+        h=height_cm + bottom_clear_cm,
         body=groove_body,
         op=adsk.fusion.FeatureOperations.CutFeatureOperation,
         start_frac=g_start_frac,
