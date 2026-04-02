@@ -281,11 +281,13 @@ def _generate(inputs):
 
     inset_start, inset_end = _per_end(inset_cm)
 
-    # Tongue pulls back by inset + end_clearance at each active end.
-    # Groove pulls back by inset only. The difference = end_clearance = fit gap.
-    end_clear_start, end_clear_end = _per_end(end_clear_cm)
-    t_start = inset_start + end_clear_start
-    t_end   = inset_end + end_clear_end
+    # End clearance ALWAYS applies to both ends (it's a fit tolerance,
+    # like side clearance — not controlled by the inset mode dropdown).
+    # Tongue pulls back by inset + end_clearance.
+    # Groove pulls back by inset only.
+    # The difference = end_clearance = the fit gap at each end.
+    t_start = inset_start + end_clear_cm
+    t_end   = inset_end + end_clear_cm
     g_start = inset_start
     g_end   = inset_end
 
