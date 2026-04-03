@@ -145,16 +145,16 @@ class _OnCommandCreated(adsk.core.CommandCreatedEventHandler):
             inp.addTextBoxCommandInput('_g', '', '<b>End Behaviour</b>', 1, True)
             dd_start = inp.addDropDownCommandInput('dd_start_end', 'Path Start',
                                                     adsk.core.DropDownStyles.TextListDropDownStyle)
-            dd_start.listItems.add('Flush', True)
-            dd_start.listItems.add('Inset', False)
+            dd_start.listItems.add('Inset', True)
+            dd_start.listItems.add('Flush', False)
 
             dd_end = inp.addDropDownCommandInput('dd_end_end', 'Path End',
                                                   adsk.core.DropDownStyles.TextListDropDownStyle)
-            dd_end.listItems.add('Flush', True)
-            dd_end.listItems.add('Inset', False)
+            dd_end.listItems.add('Inset', True)
+            dd_end.listItems.add('Flush', False)
 
             inp.addValueInput('val_inset', 'Inset Distance', 'mm',
-                              adsk.core.ValueInput.createByString('0.5 mm')).isVisible = False
+                              adsk.core.ValueInput.createByString('0 mm'))
 
             # Options
             inp.addTextBoxCommandInput('_o', '', '<b>Options</b>', 1, True)
@@ -285,11 +285,11 @@ def _generate(inputs):
         total_len = sum(c.length for c in curves)
 
     # Resolve per-end behaviour:
-    #   Flush  → joint goes to path endpoint, no clearance (open edge, nothing to bottom out against)
-    #   Inset  → joint pulls back, end clearance applies (groove has a wall, tongue must not bottom out)
-    #
-    # End clearance only at Inset ends (where the groove has an end wall).
-    # Flush ends: tongue = 0, groove = 0 (both go to the edge).
+    #   Inset  → end clearance applies + optional pullback. Default mode.
+    #            Use with 0mm inset when path stops inside the body.
+    #            Use with >0mm inset when path goes to body edge and you want a gap.
+    #   Flush  → no end clearance, no inset. Both tongue and groove go to path endpoint.
+    #            Only use when path exits the body edge (no groove wall = nothing to bottom out against).
     inset_start = inset_cm if start_mode == 'Inset' else 0.0
     inset_end   = inset_cm if end_mode == 'Inset' else 0.0
 
