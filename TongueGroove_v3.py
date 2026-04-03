@@ -532,35 +532,37 @@ def _trim_ends(root, path, face_normal, half_w, h, body,
 def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start, total_len):
     """Cut away tongue material between the trim plane and the path endpoint.
 
-    Creates a profile on a plane at `frac`, then extrudes TO a target plane
-    at the path endpoint (frac=0 for start, frac=1 for end). This gives
-    an exact cut with no distance calculation, no overshoot.
+    Uses exact gap distance — no margin, no overshoot.
+    Profile is oversized (1.5x) to fully cover the tongue cross-section.
     """
     try:
         side = 'START' if toward_start else 'END'
-        _log(f'Trim {side}: profile at frac={frac:.4f}')
+        if toward_start:
+            gap_cm = frac * total_len
+        else:
+            gap_cm = (1.0 - frac) * total_len
 
-        # Profile plane at the trim position
+        _log(f'Trim {side}: frac={frac:.4f}, gap={gap_cm * 10:.2f}mm')
+
         plane = _make_profile_plane(root, path, frac)
         _, prof = _draw_rect(root, plane, face_normal, half_w * 1.5, h * 1.5)
         if prof is None:
             _log(f'Trim {side}: no profile created')
             return
 
-        # Target plane at the path endpoint
-        target_frac = 0.001 if toward_start else 0.999
-        target_plane = _make_profile_plane(root, path, target_frac)
-
         extrudes = root.features.extrudeFeatures
         ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.CutFeatureOperation)
 
-        # Extrude TO the target plane — exact boundary, no calculation
-        ext_input.setOneSideToExtent(target_plane, True)
+        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
+                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(gap_cm))
+        ext_input.setOneSideExtent(dist_def, direction)
         ext_input.participantBodies = [body]
 
         feat = extrudes.add(ext_input)
         if feat:
-            _log(f'Trim {side}: cut succeeded (to plane at {target_frac:.3f})')
+            _log(f'Trim {side}: cut succeeded (dist={gap_cm * 10:.2f}mm, '
+                 f'dir={"Neg" if toward_start else "Pos"})')
         else:
             _log(f'Trim {side}: extrude returned null')
     except:
@@ -597,10 +599,10 @@ def _fill_groove_ends(root, path, face_normal, half_w, h, body,
 
 
 def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward_start):
-    """Extrude-Join from a plane at frac TO the body boundary.
+    """Extrude-Join from a plane at frac toward the path endpoint.
 
-    Uses setOneSideToExtent(body) — the extrude fills exactly to the body's
-    nearest face, no distance calculation needed. No overshoot, no tab.
+    Uses exact gap distance — no margin, no overshoot.
+    Negative = toward path start, Positive = toward path end.
     """
     try:
         side = 'START' if toward_start else 'END'
@@ -613,13 +615,16 @@ def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward
         extrudes = root.features.extrudeFeatures
         ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.JoinFeatureOperation)
 
-        # Extrude TO the body — fills exactly to the body boundary
-        ext_input.setOneSideToExtent(body, False)
+        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
+                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(gap_cm))
+        ext_input.setOneSideExtent(dist_def, direction)
         ext_input.participantBodies = [body]
 
         feat = extrudes.add(ext_input)
         if feat:
-            _log(f'Fill {side}: succeeded (to body)')
+            _log(f'Fill {side}: succeeded (dist={gap_cm * 10:.2f}mm, '
+                 f'dir={"Neg" if toward_start else "Pos"})')
         else:
             _log(f'Fill {side}: extrude returned null')
     except:
