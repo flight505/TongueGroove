@@ -345,13 +345,13 @@ def _generate(inputs):
               groove_centroid.y * face_normal.y +
               groove_centroid.z * face_normal.z)
 
-    if dot_gn > 0:
-        # Groove is on the face-normal side → flip so tongue protrudes toward groove
+    if dot_gn < 0:
+        # Groove is OPPOSITE to face normal → flip so profile points toward groove
         face_normal = adsk.core.Vector3D.create(
             -face_normal.x, -face_normal.y, -face_normal.z)
-        _log(f'Orientation: groove is SAME side as face normal → FLIPPED (dot={dot_gn:.3f})')
+        _log(f'Orientation: groove is OPPOSITE to face normal → FLIPPED (dot={dot_gn:.3f})')
     else:
-        _log(f'Orientation: groove is OPPOSITE side → default direction (dot={dot_gn:.3f})')
+        _log(f'Orientation: groove is SAME side as face normal → default (dot={dot_gn:.3f})')
 
     # ---- TONGUE ----
     _log('--- TONGUE ---')
