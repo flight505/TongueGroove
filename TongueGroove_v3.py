@@ -665,13 +665,17 @@ def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start, 
 
         direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
                      else adsk.fusion.ExtentDirections.PositiveExtentDirection)
-        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(gap_cm))
+        # Add 0.05mm margin to catch curve-induced slivers where the flat
+        # extrude doesn't fully cover the swept curve geometry.
+        margin_cm = 0.005  # 0.05mm
+        cut_dist = gap_cm + margin_cm
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(cut_dist))
         ext_input.setOneSideExtent(dist_def, direction)
         ext_input.participantBodies = [body]
 
         feat = extrudes.add(ext_input)
         if feat:
-            _log(f'Trim {side}: cut succeeded (dist={gap_cm * 10:.2f}mm, '
+            _log(f'Trim {side}: cut succeeded (dist={cut_dist * 10:.2f}mm incl 0.05mm margin, '
                  f'dir={"Neg" if toward_start else "Pos"})')
         else:
             _log(f'Trim {side}: extrude returned null')
