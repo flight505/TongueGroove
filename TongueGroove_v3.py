@@ -138,15 +138,20 @@ class _OnCommandCreated(adsk.core.CommandCreatedEventHandler):
             inp.addValueInput('val_bottom_clear', 'Bottom Clearance', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
             inp.addValueInput('val_end_clear', 'End Clearance (per end)', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
 
-            # Path Inset
-            inp.addTextBoxCommandInput('_g', '', '<b>Path Inset</b>', 1, True)
-            dd = inp.addDropDownCommandInput('dd_inset_mode', 'Apply To',
-                                             adsk.core.DropDownStyles.TextListDropDownStyle)
-            dd.listItems.add('Both ends', True)
-            dd.listItems.add('Start only', False)
-            dd.listItems.add('End only', False)
-            dd.listItems.add('None', False)
-            inp.addValueInput('val_inset', 'Inset Distance', 'mm', adsk.core.ValueInput.createByString('0 mm'))
+            # End Behaviour
+            inp.addTextBoxCommandInput('_g', '', '<b>End Behaviour</b>', 1, True)
+            dd_start = inp.addDropDownCommandInput('dd_start_end', 'Path Start',
+                                                    adsk.core.DropDownStyles.TextListDropDownStyle)
+            dd_start.listItems.add('Flush', True)
+            dd_start.listItems.add('Inset', False)
+
+            dd_end = inp.addDropDownCommandInput('dd_end_end', 'Path End',
+                                                  adsk.core.DropDownStyles.TextListDropDownStyle)
+            dd_end.listItems.add('Flush', True)
+            dd_end.listItems.add('Inset', False)
+
+            inp.addValueInput('val_inset', 'Inset Distance', 'mm',
+                              adsk.core.ValueInput.createByString('0.5 mm')).isVisible = False
 
             # Options
             inp.addTextBoxCommandInput('_o', '', '<b>Options</b>', 1, True)
@@ -172,7 +177,11 @@ class _OnInputChanged(adsk.core.InputChangedEventHandler):
         try:
             ea = adsk.core.InputChangedEventArgs.cast(args)
             changed, inputs = ea.input, ea.inputs
-            if changed.id == 'bool_chamfer':
+            if changed.id in ('dd_start_end', 'dd_end_end'):
+                s = adsk.core.DropDownCommandInput.cast(inputs.itemById('dd_start_end')).selectedItem.name
+                e = adsk.core.DropDownCommandInput.cast(inputs.itemById('dd_end_end')).selectedItem.name
+                inputs.itemById('val_inset').isVisible = (s == 'Inset' or e == 'Inset')
+            elif changed.id == 'bool_chamfer':
                 inputs.itemById('val_chamfer').isVisible = adsk.core.BoolValueCommandInput.cast(changed).value
             elif changed.id == 'bool_fillet':
                 enabled = adsk.core.BoolValueCommandInput.cast(changed).value
@@ -195,8 +204,7 @@ class _OnValidate(adsk.core.ValidateInputsEventHandler):
                   adsk.core.SelectionCommandInput.cast(inp.itemById('sel_groove')).selectionCount == 1 and
                   adsk.core.ValueCommandInput.cast(inp.itemById('val_width')).value > 0 and
                   adsk.core.ValueCommandInput.cast(inp.itemById('val_height')).value > 0 and
-                  adsk.core.ValueCommandInput.cast(inp.itemById('val_end_clear')).value >= 0 and
-                  adsk.core.ValueCommandInput.cast(inp.itemById('val_inset')).value >= 0)
+                  adsk.core.ValueCommandInput.cast(inp.itemById('val_end_clear')).value >= 0)
             ea.areInputsValid = ok
         except:
             pass
@@ -243,13 +251,15 @@ def _generate(inputs):
     # Read values
     width_cm       = _read_val(inputs, 'val_width')
     height_cm      = _read_val(inputs, 'val_height')
-    side_clear_cm  = _read_val(inputs, 'val_side_clear')
+    side_clear_cm   = _read_val(inputs, 'val_side_clear')
     bottom_clear_cm = _read_val(inputs, 'val_bottom_clear')
-    end_clear_cm   = _read_val(inputs, 'val_end_clear')
-    inset_cm       = _read_val(inputs, 'val_inset')
+    end_clear_cm    = _read_val(inputs, 'val_end_clear')
+    inset_cm        = _read_val(inputs, 'val_inset')
 
-    inset_mode = adsk.core.DropDownCommandInput.cast(
-        inputs.itemById('dd_inset_mode')).selectedItem.name
+    start_mode = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById('dd_start_end')).selectedItem.name  # 'Flush' or 'Inset'
+    end_mode = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById('dd_end_end')).selectedItem.name
 
     do_chamfer = adsk.core.BoolValueCommandInput.cast(inputs.itemById('bool_chamfer')).value
     chamfer_cm = _read_val(inputs, 'val_chamfer') if do_chamfer else 0.0
@@ -271,28 +281,23 @@ def _generate(inputs):
     else:
         total_len = sum(c.length for c in curves)
 
-    # Resolve inset mode → per-end inset distances (cm)
-    # Inset: how far BOTH tongue and groove pull back equally from path endpoints
-    def _per_end(dist_cm):
-        if inset_mode == 'Both ends':    return dist_cm, dist_cm
-        elif inset_mode == 'Start only': return dist_cm, 0.0
-        elif inset_mode == 'End only':   return 0.0, dist_cm
-        else:                            return 0.0, 0.0
+    # Resolve per-end behaviour:
+    #   Flush  → inset = 0 (joint goes to path endpoint)
+    #   Inset  → inset = inset_cm (joint pulls back by this amount)
+    #
+    # End clearance ALWAYS applies (tongue shorter than groove).
+    # Tongue = inset + end_clearance.  Groove = inset.
+    inset_start = inset_cm if start_mode == 'Inset' else 0.0
+    inset_end   = inset_cm if end_mode == 'Inset' else 0.0
 
-    inset_start, inset_end = _per_end(inset_cm)
-
-    # End clearance ALWAYS applies to both ends (it's a fit tolerance,
-    # like side clearance — not controlled by the inset mode dropdown).
-    # Tongue pulls back by inset + end_clearance.
-    # Groove pulls back by inset only.
-    # The difference = end_clearance = the fit gap at each end.
     t_start = inset_start + end_clear_cm
     t_end   = inset_end + end_clear_cm
     g_start = inset_start
     g_end   = inset_end
 
-    _log(f'total_len={total_len * 10:.2f}mm  inset={inset_cm * 10:.2f}mm  '
-         f'end_clear={end_clear_cm * 10:.2f}mm  mode={inset_mode}')
+    _log(f'total_len={total_len * 10:.2f}mm  end_clear={end_clear_cm * 10:.2f}mm')
+    _log(f'start_mode={start_mode} (inset={inset_start * 10:.2f}mm)  '
+         f'end_mode={end_mode} (inset={inset_end * 10:.2f}mm)')
     _log(f'tongue: start={t_start * 10:.2f}mm  end={t_end * 10:.2f}mm')
     _log(f'groove: start={g_start * 10:.2f}mm  end={g_end * 10:.2f}mm')
 

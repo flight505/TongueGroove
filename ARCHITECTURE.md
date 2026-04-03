@@ -10,16 +10,35 @@ Path positions are fractional: `frac = distance_from_start_cm / total_path_lengt
 
 ## What Gets Created (in order)
 
-### Step 1: Read inputs + resolve gaps
+### Step 1: Read inputs + resolve end behaviour
 
-Gap mode dropdown → per-end gap distances:
+UI parameters and what they control:
 
-    mode="Both ends":  start=gap, end=gap
-    mode="Start only": start=gap, end=0
-    mode="End only":   start=0,   end=gap
-    mode="None":       start=0,   end=0
+    Joint Size:
+      Tongue Width      → cross-section width (cm)
+      Tongue Height     → protrusion height from face (cm)
 
-Tongue gap and groove gap are **independent**. Setting both to 0.5mm means 0.5mm each, not 1.0mm total.
+    Fit Clearance (always applies, both ends, like a tolerance):
+      Side Clearance    → groove half_w = tongue half_w + side_clear (per side)
+      Bottom Clearance  → groove height = tongue height + bottom_clear
+      End Clearance     → tongue is shorter than groove by this per end
+
+    End Behaviour (per-end, independent):
+      Path Start        → Flush (joint to path endpoint) or Inset (pull back)
+      Path End          → Flush or Inset
+      Inset Distance    → how far both tongue+groove pull back (only when Inset)
+
+Resolution to per-end distances:
+
+    inset_start = inset_cm if start_mode == 'Inset' else 0
+    inset_end   = inset_cm if end_mode == 'Inset' else 0
+
+    tongue_start = inset_start + end_clearance    (always applies)
+    tongue_end   = inset_end + end_clearance
+    groove_start = inset_start                    (no end clearance)
+    groove_end   = inset_end
+
+The difference tongue - groove = end_clearance at each end. This is the fit gap.
 
 ### Step 2: Build sweep Path
 
