@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tongue &amp; Groove Help</title>
+<style>
+body { font-family: -apple-system, 'Segoe UI', sans-serif; margin: 20px; color: #333; max-width: 500px; }
+h1 { font-size: 18px; margin-bottom: 4px; }
+h2 { font-size: 14px; color: #666; margin-top: 16px; }
+p, li { font-size: 13px; line-height: 1.5; }
+ul { padding-left: 20px; }
+a { color: #0078d4; }
+.section { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<h1>Tongue &amp; Groove</h1>
+<p>Creates parametric tongue-and-groove joints between two bodies along a sketch centreline path. Designed for 3D printing with configurable fit clearances.</p>
+
+<div class="section">
+<h2>Quick Start</h2>
+<ol>
+<li>Draw a centreline sketch on the <b>tongue body</b> face</li>
+<li>Click <b>Solid &rarr; Modify &rarr; Tongue &amp; Groove</b></li>
+<li>Select the centreline, tongue body, and groove body</li>
+<li>Adjust dimensions and clearances</li>
+<li>Click OK</li>
+</ol>
+</div>
+
+<div class="section">
+<h2>Fit Clearance</h2>
+<ul>
+<li><b>Side</b> &mdash; groove wider than tongue per side (0.1&ndash;0.2mm for FDM)</li>
+<li><b>Bottom</b> &mdash; groove deeper than tongue</li>
+<li><b>End</b> &mdash; tongue shorter than groove per end</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>End Behaviour</h2>
+<ul>
+<li><b>Inset</b> (default) &mdash; end clearance applied, optional pullback distance</li>
+<li><b>Flush</b> &mdash; no clearance, joint goes to path endpoint (use at body edges)</li>
+</ul>
+</div>
+
+<div class="section">
+<h2>Tips</h2>
+<ul>
+<li>Draw the centreline on the tongue body, not the groove body</li>
+<li>Click one curve to auto-select the full connected path</li>
+<li>Use Inset with 0mm for paths ending inside the body</li>
+<li>Use Flush only where the path exits through a body edge</li>
+</ul>
+</div>
+
+<p><a href="https://github.com/flight505/TongueGroove">Documentation &amp; Source on GitHub</a></p>
+</body>
+</html>

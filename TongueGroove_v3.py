@@ -117,6 +117,7 @@ class _OnCommandCreated(adsk.core.CommandCreatedEventHandler):
             cmd = adsk.core.CommandCreatedEventArgs.cast(args).command
             inp = cmd.commandInputs
             cmd.isExecutedWhenPreEmpted = False
+            cmd.helpFile = os.path.join(_RESOURCE_DIR, 'help.html')
 
             # Selections
             sp = inp.addSelectionInput('sel_path', 'Centreline Path',
