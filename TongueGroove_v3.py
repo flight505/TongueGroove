@@ -12,6 +12,7 @@ Version: 3.0.0
 """
 
 import traceback
+import os
 
 import adsk.core
 import adsk.fusion
@@ -23,6 +24,11 @@ CMD_ID   = 'TongueGroove_Cmd'
 CMD_NAME = 'Tongue & Groove'
 CMD_DESC = ('Creates a 3D-print-ready tongue and groove joint between '
             'two bodies along a sketch centreline path.')
+
+# Icon and toolclip paths (relative to this file's directory)
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_RESOURCE_DIR = os.path.join(_THIS_DIR, 'Resources')
+_TOOLCLIP_PATH = os.path.join(_RESOURCE_DIR, 'toolclip.png')
 
 _handlers = []
 
@@ -53,7 +59,8 @@ def run(context):
         if old:
             old.deleteMe()
 
-        cmdDef = ui.commandDefinitions.addButtonDefinition(CMD_ID, CMD_NAME, CMD_DESC, '')
+        cmdDef = ui.commandDefinitions.addButtonDefinition(CMD_ID, CMD_NAME, CMD_DESC, _RESOURCE_DIR)
+        cmdDef.toolClipFilename = _TOOLCLIP_PATH
         handler = _OnCommandCreated()
         cmdDef.commandCreated.add(handler)
         _handlers.append(handler)
@@ -110,55 +117,117 @@ class _OnCommandCreated(adsk.core.CommandCreatedEventHandler):
             cmd = adsk.core.CommandCreatedEventArgs.cast(args).command
             inp = cmd.commandInputs
             cmd.isExecutedWhenPreEmpted = False
+            cmd.helpFile = os.path.join(_RESOURCE_DIR, 'help.html')
 
             # Selections
             sp = inp.addSelectionInput('sel_path', 'Centreline Path',
-                                       'Select sketch curve(s) for the joint centreline')
+                                       'Select sketch curve(s) on the tongue body face')
             sp.addSelectionFilter('SketchCurves')
             sp.setSelectionLimits(1, 0)
+            sp.tooltip = 'Centreline Path'
+            sp.tooltipDescription = ('Draw the centreline sketch on the <b>tongue body</b> face.<br>'
+                                     'The tongue protrudes from this face toward the groove body.<br>'
+                                     'Click one curve to auto-select the full connected path,<br>'
+                                     'or select multiple curves for a partial path.')
 
             st = inp.addSelectionInput('sel_tongue', 'Tongue Body',
-                                       'Body that receives the tongue protrusion')
+                                       'Select the body that receives the tongue')
             st.addSelectionFilter('SolidBodies')
             st.setSelectionLimits(1, 1)
+            st.tooltip = 'Tongue Body'
+            st.tooltipDescription = ('The body the centreline is drawn on.<br>'
+                                     'A rectangular protrusion (tongue) will be joined to this body.')
 
             sg = inp.addSelectionInput('sel_groove', 'Groove Body',
-                                       'Body that receives the groove cut')
+                                       'Select the body that receives the groove')
             sg.addSelectionFilter('SolidBodies')
             sg.setSelectionLimits(1, 1)
+            sg.tooltip = 'Groove Body'
+            sg.tooltipDescription = ('The opposite body.<br>'
+                                     'A matching channel (groove) will be cut into this body.<br>'
+                                     'The groove is slightly wider and deeper than the tongue<br>'
+                                     'to provide fit clearance.')
 
             # Dimensions
             inp.addTextBoxCommandInput('_d', '', '<b>Dimensions</b>', 1, True)
-            inp.addValueInput('val_width',  'Tongue Width',  'mm', adsk.core.ValueInput.createByString('6 mm'))
-            inp.addValueInput('val_height', 'Tongue Height', 'mm', adsk.core.ValueInput.createByString('3 mm'))
+
+            w = inp.addValueInput('val_width', 'Tongue Width', 'mm', adsk.core.ValueInput.createByString('6 mm'))
+            w.tooltip = 'Total width of the tongue cross-section'
+            w.tooltipDescription = 'Measured perpendicular to the path direction,<br>across the face surface.'
+
+            h = inp.addValueInput('val_height', 'Tongue Height', 'mm', adsk.core.ValueInput.createByString('3 mm'))
+            h.tooltip = 'How far the tongue protrudes from the face'
+            h.tooltipDescription = 'Measured along the face normal (perpendicular to the face).'
 
             # Fit Clearance
             inp.addTextBoxCommandInput('_t', '', '<b>Fit Clearance</b>', 1, True)
-            inp.addValueInput('val_side_clear', 'Side Clearance (per side)', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
-            inp.addValueInput('val_bottom_clear', 'Bottom Clearance', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
-            inp.addValueInput('val_end_clear', 'End Clearance (per end)', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
+
+            sc = inp.addValueInput('val_side_clear', 'Side Clearance', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            sc.tooltip = 'Gap between tongue sides and groove walls'
+            sc.tooltipDescription = ('Applied per side. The groove is wider than the tongue<br>'
+                                     'by 2× this value. Typical for FDM: 0.1–0.2 mm.')
+
+            bc = inp.addValueInput('val_bottom_clear', 'Bottom Clearance', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            bc.tooltip = 'Gap between tongue top and groove floor'
+            bc.tooltipDescription = ('The groove is deeper than the tongue by this value.<br>'
+                                     'Prevents the tongue from bottoming out vertically.')
+
+            ec = inp.addValueInput('val_end_clear', 'End Clearance', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
+            ec.tooltip = 'Gap between tongue ends and groove walls'
+            ec.tooltipDescription = ('Applied per end (where End Behaviour = Inset).<br>'
+                                     'The tongue is shorter than the groove by this value<br>'
+                                     'at each Inset end, so it slides in without bottoming out.<br>'
+                                     'Not applied at Flush ends (no groove wall there).')
 
             # End Behaviour
             inp.addTextBoxCommandInput('_g', '', '<b>End Behaviour</b>', 1, True)
+
             dd_start = inp.addDropDownCommandInput('dd_start_end', 'Path Start',
                                                     adsk.core.DropDownStyles.TextListDropDownStyle)
-            dd_start.listItems.add('Flush', True)
-            dd_start.listItems.add('Inset', False)
+            dd_start.listItems.add('Inset', True)
+            dd_start.listItems.add('Flush', False)
+            dd_start.tooltip = 'Behaviour at the path start point'
+            dd_start.tooltipDescription = ('<b>Inset</b> (default): End clearance applied. Use when path<br>'
+                                           'stops inside the body or when you want a gap at this end.<br>'
+                                           'Set Inset Distance to pull both tongue and groove back.<br><br>'
+                                           '<b>Flush</b>: No end clearance, no inset. Both tongue and groove<br>'
+                                           'go to the path endpoint. Use only when the path exits<br>'
+                                           'through a body edge (no groove wall at this end).')
 
             dd_end = inp.addDropDownCommandInput('dd_end_end', 'Path End',
                                                   adsk.core.DropDownStyles.TextListDropDownStyle)
-            dd_end.listItems.add('Flush', True)
-            dd_end.listItems.add('Inset', False)
+            dd_end.listItems.add('Inset', True)
+            dd_end.listItems.add('Flush', False)
+            dd_end.tooltip = 'Behaviour at the path end point'
+            dd_end.tooltipDescription = dd_start.tooltipDescription
 
-            inp.addValueInput('val_inset', 'Inset Distance', 'mm',
-                              adsk.core.ValueInput.createByString('0.5 mm')).isVisible = False
+            vi = inp.addValueInput('val_inset', 'Inset Distance', 'mm',
+                                   adsk.core.ValueInput.createByString('0 mm'))
+            vi.tooltip = 'How far to pull both tongue and groove back from the path endpoint'
+            vi.tooltipDescription = ('Applied at each Inset end. Moves both tongue and groove<br>'
+                                     'inward by this distance. Use when the path extends to a<br>'
+                                     'body edge and you want the groove to stay inside the body.<br>'
+                                     'Set to 0 for end clearance only (no pullback).')
 
             # Options
             inp.addTextBoxCommandInput('_o', '', '<b>Options</b>', 1, True)
-            inp.addBoolValueInput('bool_chamfer', 'Add Lead-in Chamfer', True, '', True)
-            inp.addValueInput('val_chamfer', 'Chamfer Size', 'mm', adsk.core.ValueInput.createByString('0.5 mm'))
-            inp.addBoolValueInput('bool_fillet', 'Fillet Groove Corners', True, '', False)
-            inp.addValueInput('val_fillet', 'Fillet Radius', 'mm', adsk.core.ValueInput.createByString('0.2 mm')).isVisible = False
+
+            ch = inp.addBoolValueInput('bool_chamfer', 'Add Lead-in Chamfer', True, '', True)
+            ch.tooltip = 'Chamfer the top edges of the tongue'
+            ch.tooltipDescription = 'Adds a chamfer to the top longitudinal edges<br>of the tongue for easier assembly.'
+
+            cs = inp.addValueInput('val_chamfer', 'Chamfer Size', 'mm', adsk.core.ValueInput.createByString('0.5 mm'))
+            cs.tooltip = 'Chamfer distance'
+
+            fi = inp.addBoolValueInput('bool_fillet', 'Fillet Groove Corners', True, '', False)
+            fi.tooltip = 'Fillet the inside corners of the groove'
+            fi.tooltipDescription = ('Adds fillets to the longitudinal inside edges of the<br>'
+                                     'groove channel. Helps with FDM printing where sharp<br>'
+                                     'inside corners tend to have artifacts.')
+
+            fr = inp.addValueInput('val_fillet', 'Fillet Radius', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
+            fr.isVisible = False
+            fr.tooltip = 'Fillet radius'
 
             # Sub-handlers
             for cls, event in [(_OnInputChanged,    cmd.inputChanged),
@@ -282,11 +351,11 @@ def _generate(inputs):
         total_len = sum(c.length for c in curves)
 
     # Resolve per-end behaviour:
-    #   Flush  → joint goes to path endpoint, no clearance (open edge, nothing to bottom out against)
-    #   Inset  → joint pulls back, end clearance applies (groove has a wall, tongue must not bottom out)
-    #
-    # End clearance only at Inset ends (where the groove has an end wall).
-    # Flush ends: tongue = 0, groove = 0 (both go to the edge).
+    #   Inset  → end clearance applies + optional pullback. Default mode.
+    #            Use with 0mm inset when path stops inside the body.
+    #            Use with >0mm inset when path goes to body edge and you want a gap.
+    #   Flush  → no end clearance, no inset. Both tongue and groove go to path endpoint.
+    #            Only use when path exits the body edge (no groove wall = nothing to bottom out against).
     inset_start = inset_cm if start_mode == 'Inset' else 0.0
     inset_end   = inset_cm if end_mode == 'Inset' else 0.0
 
@@ -329,6 +398,29 @@ def _generate(inputs):
     # Build path + face normal
     sweep_path  = _make_path(curves)
     face_normal = _face_normal(sketch)
+
+    # ---- Auto-detect protrusion direction ----
+    # The tongue must protrude TOWARD the groove body.
+    # Check which side of the face the groove body is on.
+    # If the groove centroid is on the same side as the face normal,
+    # flip the normal so the profile builds toward the groove.
+    face_origin = _face_origin(sketch)
+    gb_bb = groove_body.boundingBox
+    groove_centroid = adsk.core.Vector3D.create(
+        (gb_bb.minPoint.x + gb_bb.maxPoint.x) / 2.0 - face_origin.x,
+        (gb_bb.minPoint.y + gb_bb.maxPoint.y) / 2.0 - face_origin.y,
+        (gb_bb.minPoint.z + gb_bb.maxPoint.z) / 2.0 - face_origin.z)
+    dot_gn = (groove_centroid.x * face_normal.x +
+              groove_centroid.y * face_normal.y +
+              groove_centroid.z * face_normal.z)
+
+    if dot_gn < 0:
+        # Groove is OPPOSITE to face normal → flip so profile points toward groove
+        face_normal = adsk.core.Vector3D.create(
+            -face_normal.x, -face_normal.y, -face_normal.z)
+        _log(f'Orientation: groove is OPPOSITE to face normal → FLIPPED (dot={dot_gn:.3f})')
+    else:
+        _log(f'Orientation: groove is SAME side as face normal → default (dot={dot_gn:.3f})')
 
     # ---- TONGUE ----
     _log('--- TONGUE ---')
@@ -409,6 +501,18 @@ def _face_normal(sketch):
     if plane:
         return plane.geometry.normal
     return adsk.core.Vector3D.create(0, 0, 1)
+
+
+def _face_origin(sketch):
+    """A point on the sketch's reference plane (for direction calculations)."""
+    ref = sketch.referencePlane
+    face = adsk.fusion.BRepFace.cast(ref)
+    if face:
+        return face.centroid
+    plane = adsk.fusion.ConstructionPlane.cast(ref)
+    if plane:
+        return plane.geometry.origin
+    return adsk.core.Point3D.create(0, 0, 0)
 
 
 def _make_profile_plane(root, path, frac):
@@ -561,13 +665,17 @@ def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start, 
 
         direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
                      else adsk.fusion.ExtentDirections.PositiveExtentDirection)
-        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(gap_cm))
+        # Add 0.05mm margin to catch curve-induced slivers where the flat
+        # extrude doesn't fully cover the swept curve geometry.
+        margin_cm = 0.005  # 0.05mm
+        cut_dist = gap_cm + margin_cm
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(cut_dist))
         ext_input.setOneSideExtent(dist_def, direction)
         ext_input.participantBodies = [body]
 
         feat = extrudes.add(ext_input)
         if feat:
-            _log(f'Trim {side}: cut succeeded (dist={gap_cm * 10:.2f}mm, '
+            _log(f'Trim {side}: cut succeeded (dist={cut_dist * 10:.2f}mm incl 0.05mm margin, '
                  f'dir={"Neg" if toward_start else "Pos"})')
         else:
             _log(f'Trim {side}: extrude returned null')
