@@ -430,14 +430,15 @@ def _generate(inputs):
         body=tongue_body,
         op=adsk.fusion.FeatureOperations.JoinFeatureOperation)
 
+    # Chamfer BEFORE trim cuts — sweep_feat.faces become stale after trims
+    if chamfer_cm > 0 and tongue_feat:
+        _chamfer_top(root, tongue_feat, chamfer_cm)
+
     _trim_ends(root, sweep_path, face_normal,
                half_w=width_cm / 2.0, h=height_cm,
                body=tongue_body,
                start_gap_cm=t_start, end_gap_cm=t_end,
                total_len=total_len)
-
-    if chamfer_cm > 0 and tongue_feat:
-        _chamfer_top(root, tongue_feat, chamfer_cm)
 
     # ---- GROOVE ----
     # Full sweep cut, then fill-back at each end.
