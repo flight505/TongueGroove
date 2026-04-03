@@ -761,7 +761,19 @@ def _chamfer_top(root, sweep_feat, chamfer_cm):
     Then filter to longitudinal edges (longer ones).
     """
     try:
-        sweep_fids = {f.tempId for f in sweep_feat.faces}
+        _log(f'Chamfer: sweep_feat has {sweep_feat.faces.count} faces')
+
+        # Log each sweep face with normal info
+        sweep_fids = set()
+        for i in range(sweep_feat.faces.count):
+            f = sweep_feat.faces.item(i)
+            sweep_fids.add(f.tempId)
+            _, n = f.evaluator.getNormalAtPoint(f.centroid)
+            c = f.centroid
+            _log(f'  face[{i}]: id={f.tempId} area={f.area*100:.1f}mm2 '
+                 f'n=({n.x:.2f},{n.y:.2f},{n.z:.2f}) '
+                 f'c=({c.x*10:.1f},{c.y*10:.1f},{c.z*10:.1f})mm '
+                 f'edges={f.edges.count}')
 
         candidates = []
         seen = set()
@@ -771,10 +783,14 @@ def _chamfer_top(root, sweep_feat, chamfer_cm):
                 if eid in seen:
                     continue
                 seen.add(eid)
-                if all(af.tempId in sweep_fids for af in edge.faces):
+                both_sweep = all(af.tempId in sweep_fids for af in edge.faces)
+                if both_sweep:
                     candidates.append(edge)
 
+        _log(f'Chamfer: {len(candidates)} edges where both faces are sweep faces')
+
         if not candidates:
+            _log('Chamfer: no candidate edges found')
             return
 
         max_len = max(e.length for e in candidates)
@@ -782,6 +798,9 @@ def _chamfer_top(root, sweep_feat, chamfer_cm):
         for e in candidates:
             if e.length >= max_len * 0.3:
                 edges.add(e)
+
+        _log(f'Chamfer: {edges.count} edges after length filter '
+             f'(>= {max_len * 10 * 0.3:.1f}mm, max={max_len * 10:.1f}mm)')
 
         if edges.count == 0:
             return
