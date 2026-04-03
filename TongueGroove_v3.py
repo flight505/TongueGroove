@@ -330,6 +330,29 @@ def _generate(inputs):
     sweep_path  = _make_path(curves)
     face_normal = _face_normal(sketch)
 
+    # ---- Auto-detect protrusion direction ----
+    # The tongue must protrude TOWARD the groove body.
+    # Check which side of the face the groove body is on.
+    # If the groove centroid is on the same side as the face normal,
+    # flip the normal so the profile builds toward the groove.
+    face_origin = _face_origin(sketch)
+    gb_bb = groove_body.boundingBox
+    groove_centroid = adsk.core.Vector3D.create(
+        (gb_bb.minPoint.x + gb_bb.maxPoint.x) / 2.0 - face_origin.x,
+        (gb_bb.minPoint.y + gb_bb.maxPoint.y) / 2.0 - face_origin.y,
+        (gb_bb.minPoint.z + gb_bb.maxPoint.z) / 2.0 - face_origin.z)
+    dot_gn = (groove_centroid.x * face_normal.x +
+              groove_centroid.y * face_normal.y +
+              groove_centroid.z * face_normal.z)
+
+    if dot_gn > 0:
+        # Groove is on the face-normal side → flip so tongue protrudes toward groove
+        face_normal = adsk.core.Vector3D.create(
+            -face_normal.x, -face_normal.y, -face_normal.z)
+        _log(f'Orientation: groove is SAME side as face normal → FLIPPED (dot={dot_gn:.3f})')
+    else:
+        _log(f'Orientation: groove is OPPOSITE side → default direction (dot={dot_gn:.3f})')
+
     # ---- TONGUE ----
     _log('--- TONGUE ---')
     tongue_feat = _full_sweep(
@@ -409,6 +432,18 @@ def _face_normal(sketch):
     if plane:
         return plane.geometry.normal
     return adsk.core.Vector3D.create(0, 0, 1)
+
+
+def _face_origin(sketch):
+    """A point on the sketch's reference plane (for direction calculations)."""
+    ref = sketch.referencePlane
+    face = adsk.fusion.BRepFace.cast(ref)
+    if face:
+        return face.centroid
+    plane = adsk.fusion.ConstructionPlane.cast(ref)
+    if plane:
+        return plane.geometry.origin
+    return adsk.core.Point3D.create(0, 0, 0)
 
 
 def _make_profile_plane(root, path, frac):
