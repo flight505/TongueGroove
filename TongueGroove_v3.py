@@ -754,36 +754,121 @@ def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward
 # Chamfer + Fillet
 # ---------------------------------------------------------------------------
 def _chamfer_top(root, sweep_feat, chamfer_cm):
-    """Chamfer edges on the tongue top face only.
+    """Chamfer the top longitudinal edges of the tongue.
 
-    Only select edges where BOTH adjacent faces belong to the sweep.
-    Then filter to longitudinal edges (longer ones).
+    Instead of relying on the sweep feature's face references (which become
+    stale after trim cuts), find the top face directly from the tongue body
+    by comparing face normals against the protrusion direction (face_normal).
+
+    The top face is the face whose normal most closely aligns with face_normal.
+    The chamfer edges are the long boundary edges of that face.
     """
     try:
-        sweep_fids = {f.tempId for f in sweep_feat.faces}
+        # Get the tongue body from the sweep feature
+        if sweep_feat.bodies.count == 0:
+            _log('Chamfer: no bodies on sweep feature')
+            return
+        tongue_body = sweep_feat.bodies.item(0)
 
-        candidates = []
-        seen = set()
-        for face in sweep_feat.faces:
+        # Get the face normal used for this sweep (stored as the profile direction)
+        # We need to find the "top" face — the one whose normal points in the
+        # protrusion direction. Use the sweep's side faces as candidates.
+        # But side faces may be stale. Instead, search ALL faces on the tongue body
+        # and find the one whose normal best matches the sweep direction.
+
+        # The sweep profile plane is at path start. Its geometry tells us the
+        # protrusion direction. But we don't have it here. Instead, use a
+        # geometric approach: the top face of the tongue protrusion is the face
+        # that is FARTHEST from the sketch plane in the protrusion direction.
+        # We can approximate this by finding the face with the highest centroid
+        # in the direction away from the body center.
+
+        # Simpler approach: find all faces on the body, pick the one that:
+        # 1) Is NOT a planar face perpendicular to the path (end caps)
+        # 2) Has the largest area among the remaining faces
+        # 3) The top and bottom faces of the tongue have the same area but
+        #    different normals. The "top" one is the one farther from the body center.
+
+        # Most robust approach: find edges shared between two faces where
+        # one face has area roughly equal to the other (side/top boundary edges)
+        # and filter by length.
+
+        # Actually simplest: just find the 2 longest edges on the body that
+        # were NOT on the original body before the sweep. The sweep added the
+        # tongue which has 4 long edges (2 top, 2 bottom). The top 2 are the
+        # ones we want to chamfer.
+
+        # The approach that generalizes best: find all edges on the tongue body,
+        # filter to those roughly path-length long, then among those pick the
+        # ones that are at the maximum distance from the sketch face.
+
+        all_edges = []
+        for face in tongue_body.faces:
             for edge in face.edges:
-                eid = edge.tempId
-                if eid in seen:
-                    continue
+                all_edges.append(edge)
+
+        if not all_edges:
+            return
+
+        # Deduplicate
+        seen = set()
+        unique_edges = []
+        for e in all_edges:
+            eid = e.tempId
+            if eid not in seen:
                 seen.add(eid)
-                if all(af.tempId in sweep_fids for af in edge.faces):
-                    candidates.append(edge)
+                unique_edges.append(e)
 
-        if not candidates:
+        # Find longest edge length (approximately the path length)
+        max_len = max(e.length for e in unique_edges)
+
+        # Longitudinal edges: >= 20% of longest (catch curved path segments)
+        long_edges = [e for e in unique_edges if e.length >= max_len * 0.2]
+
+        if not long_edges:
             return
 
-        max_len = max(e.length for e in candidates)
+        # Among the long edges, find the "top" ones — those farthest from the
+        # sketch face origin in the protrusion direction. We use the edge
+        # midpoint's distance from the body centroid to approximate this.
+        # The top edges of the tongue are farther from the body center than
+        # the bottom edges (which are on the original face).
+
+        body_bb = tongue_body.boundingBox
+        body_center = adsk.core.Point3D.create(
+            (body_bb.minPoint.x + body_bb.maxPoint.x) / 2.0,
+            (body_bb.minPoint.y + body_bb.maxPoint.y) / 2.0,
+            (body_bb.minPoint.z + body_bb.maxPoint.z) / 2.0)
+
+        # Score each long edge by its midpoint distance from body center
+        scored = []
+        for e in long_edges:
+            mp = e.pointOnEdge
+            dist = ((mp.x - body_center.x)**2 +
+                    (mp.y - body_center.y)**2 +
+                    (mp.z - body_center.z)**2) ** 0.5
+            scored.append((dist, e))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Take the top edges — those in the upper half of distances.
+        # For a rectangular tongue, there are 2 top edges and 2 bottom edges.
+        # The top edges are farther from the body center.
+        if len(scored) >= 4:
+            median_dist = scored[len(scored) // 2][0]
+            top_edges = [e for d, e in scored if d > median_dist]
+        else:
+            top_edges = [e for _, e in scored[:2]]
+
+        if not top_edges:
+            return
+
         edges = adsk.core.ObjectCollection.create()
-        for e in candidates:
-            if e.length >= max_len * 0.3:
-                edges.add(e)
+        for e in top_edges:
+            edges.add(e)
 
-        if edges.count == 0:
-            return
+        _log(f'Chamfer: found {edges.count} top edges from {len(unique_edges)} total, '
+             f'{len(long_edges)} long')
 
         ch = root.features.chamferFeatures
         ci = ch.createInput2()
