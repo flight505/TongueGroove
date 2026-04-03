@@ -418,8 +418,12 @@ def _make_profile_plane(root, path, frac):
     return root.constructionPlanes.add(inp)
 
 
-def _draw_rect(root, plane, face_normal, half_w, h):
-    """Draw oriented rectangle on a construction plane. Returns (sketch, profile)."""
+def _draw_rect(root, plane, face_normal, half_w, h, invert_height=False):
+    """Draw oriented rectangle on a construction plane. Returns (sketch, profile).
+
+    invert_height: if True, height goes opposite to face normal (into the body).
+    Used for groove fill profiles that must not extend above the face.
+    """
     sk = root.sketches.add(plane)
     pg = plane.geometry
     u, v = pg.uDirection, pg.vDirection
@@ -427,12 +431,14 @@ def _draw_rect(root, plane, face_normal, half_w, h):
     u_dot = u.x*face_normal.x + u.y*face_normal.y + u.z*face_normal.z
     v_dot = v.x*face_normal.x + v.y*face_normal.y + v.z*face_normal.z
 
+    flip = -1.0 if invert_height else 1.0
+
     if abs(v_dot) >= abs(u_dot):
-        sign = 1.0 if v_dot > 0 else -1.0
+        sign = (1.0 if v_dot > 0 else -1.0) * flip
         p1 = adsk.core.Point3D.create(-half_w, 0, 0)
         p2 = adsk.core.Point3D.create(half_w, sign * h, 0)
     else:
-        sign = 1.0 if u_dot > 0 else -1.0
+        sign = (1.0 if u_dot > 0 else -1.0) * flip
         p1 = adsk.core.Point3D.create(0, -half_w, 0)
         p2 = adsk.core.Point3D.create(sign * h, half_w, 0)
 
@@ -607,7 +613,9 @@ def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward
     try:
         side = 'START' if toward_start else 'END'
         plane = _make_profile_plane(root, path, frac)
-        _, prof = _draw_rect(root, plane, face_normal, half_w, h)
+        # invert_height=True: profile goes INTO the body (opposite of face normal)
+        # so the fill doesn't create material above the face surface
+        _, prof = _draw_rect(root, plane, face_normal, half_w, h, invert_height=True)
         if prof is None:
             _log(f'Fill {side}: no profile created')
             return

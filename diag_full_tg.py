@@ -202,13 +202,14 @@ def run(context):
         u_dot_f = pg_f.uDirection.z
         v_dot_f = pg_f.vDirection.z
 
+        # INVERTED height: profile goes INTO the body (opposite of face normal)
         if abs(v_dot_f) >= abs(u_dot_f):
-            sign_f = 1.0 if v_dot_f > 0 else -1.0
+            sign_f = -1.0 if v_dot_f > 0 else 1.0   # inverted
             sk_fill.sketchCurves.sketchLines.addTwoPointRectangle(
                 adsk.core.Point3D.create(-groove_hw, 0, 0),
                 adsk.core.Point3D.create(groove_hw, sign_f * groove_h, 0))
         else:
-            sign_f = 1.0 if u_dot_f > 0 else -1.0
+            sign_f = -1.0 if u_dot_f > 0 else 1.0   # inverted
             sk_fill.sketchCurves.sketchLines.addTwoPointRectangle(
                 adsk.core.Point3D.create(0, -groove_hw, 0),
                 adsk.core.Point3D.create(sign_f * groove_h, groove_hw, 0))
