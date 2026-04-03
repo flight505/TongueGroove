@@ -282,16 +282,16 @@ def _generate(inputs):
         total_len = sum(c.length for c in curves)
 
     # Resolve per-end behaviour:
-    #   Flush  → inset = 0 (joint goes to path endpoint)
-    #   Inset  → inset = inset_cm (joint pulls back by this amount)
+    #   Flush  → joint goes to path endpoint, no clearance (open edge, nothing to bottom out against)
+    #   Inset  → joint pulls back, end clearance applies (groove has a wall, tongue must not bottom out)
     #
-    # End clearance ALWAYS applies (tongue shorter than groove).
-    # Tongue = inset + end_clearance.  Groove = inset.
+    # End clearance only at Inset ends (where the groove has an end wall).
+    # Flush ends: tongue = 0, groove = 0 (both go to the edge).
     inset_start = inset_cm if start_mode == 'Inset' else 0.0
     inset_end   = inset_cm if end_mode == 'Inset' else 0.0
 
-    t_start = inset_start + end_clear_cm
-    t_end   = inset_end + end_clear_cm
+    t_start = inset_start + (end_clear_cm if start_mode == 'Inset' else 0.0)
+    t_end   = inset_end + (end_clear_cm if end_mode == 'Inset' else 0.0)
     g_start = inset_start
     g_end   = inset_end
 
