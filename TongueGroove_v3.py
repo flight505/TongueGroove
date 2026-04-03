@@ -613,9 +613,10 @@ def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward
     try:
         side = 'START' if toward_start else 'END'
         plane = _make_profile_plane(root, path, frac)
-        # invert_height=True: profile goes INTO the body (opposite of face normal)
-        # so the fill doesn't create material above the face surface
-        _, prof = _draw_rect(root, plane, face_normal, half_w, h, invert_height=True)
+        # Same profile direction as the groove sweep (face normal direction).
+        # The groove channel is cut in the face normal direction, so the fill
+        # must also extend in the face normal direction to fill that channel.
+        _, prof = _draw_rect(root, plane, face_normal, half_w, h)
         if prof is None:
             _log(f'Fill {side}: no profile created')
             return
