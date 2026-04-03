@@ -430,14 +430,15 @@ def _generate(inputs):
         body=tongue_body,
         op=adsk.fusion.FeatureOperations.JoinFeatureOperation)
 
+    # Chamfer BEFORE trim cuts — sweep_feat.faces become stale after trims
+    if chamfer_cm > 0 and tongue_feat:
+        _chamfer_top(root, tongue_feat, chamfer_cm)
+
     _trim_ends(root, sweep_path, face_normal,
                half_w=width_cm / 2.0, h=height_cm,
                body=tongue_body,
                start_gap_cm=t_start, end_gap_cm=t_end,
                total_len=total_len)
-
-    if chamfer_cm > 0 and tongue_feat:
-        _chamfer_top(root, tongue_feat, chamfer_cm)
 
     # ---- GROOVE ----
     # Full sweep cut, then fill-back at each end.
@@ -754,33 +755,69 @@ def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward
 # Chamfer + Fillet
 # ---------------------------------------------------------------------------
 def _chamfer_top(root, sweep_feat, chamfer_cm):
-    """Chamfer edges on the tongue top face only.
+    """Chamfer the top edges of the tongue protrusion.
 
-    Only select edges where BOTH adjacent faces belong to the sweep.
-    Then filter to longitudinal edges (longer ones).
+    Strategy: find the tongue's top face (the sweep face with the largest
+    area, excluding original body faces which are even larger), then select
+    its edges that border other sweep faces (not body faces). These are the
+    longitudinal edges running along the path on top of the tongue.
     """
     try:
-        sweep_fids = {f.tempId for f in sweep_feat.faces}
+        # Collect sweep face IDs and find the top face
+        sweep_faces = []
+        sweep_fids = set()
+        for i in range(sweep_feat.faces.count):
+            f = sweep_feat.faces.item(i)
+            sweep_fids.add(f.tempId)
+            sweep_faces.append(f)
 
-        candidates = []
-        seen = set()
-        for face in sweep_feat.faces:
-            for edge in face.edges:
-                eid = edge.tempId
-                if eid in seen:
-                    continue
-                seen.add(eid)
-                if all(af.tempId in sweep_fids for af in edge.faces):
-                    candidates.append(edge)
-
-        if not candidates:
+        if not sweep_faces:
+            _log('Chamfer: no sweep faces')
             return
 
-        max_len = max(e.length for e in candidates)
+        # Sort by area descending. The tongue top face is the LARGEST sweep
+        # face that is NOT one of the original body's faces. The original
+        # body faces (start/end faces of the sweep that coincide with the
+        # body) tend to be the very largest because they span the full body.
+        # The tongue top face is the largest face among the sweep's own
+        # created geometry.
+        #
+        # Use startFaces/endFaces to identify body-coincident faces.
+        body_face_ids = set()
+        if sweep_feat.startFaces:
+            for f in sweep_feat.startFaces:
+                body_face_ids.add(f.tempId)
+        if sweep_feat.endFaces:
+            for f in sweep_feat.endFaces:
+                body_face_ids.add(f.tempId)
+
+        # The top face: largest area sweep face NOT in startFaces/endFaces
+        side_faces = [f for f in sweep_faces if f.tempId not in body_face_ids]
+        if not side_faces:
+            _log('Chamfer: no side faces after excluding start/end faces')
+            return
+
+        side_faces.sort(key=lambda f: f.area, reverse=True)
+        top_face = side_faces[0]
+
+        _, tn = top_face.evaluator.getNormalAtPoint(top_face.centroid)
+        _log(f'Chamfer: top face area={top_face.area*100:.1f}mm2 '
+             f'n=({tn.x:.2f},{tn.y:.2f},{tn.z:.2f}) edges={top_face.edges.count}')
+
+        # Select edges of the top face that border OTHER sweep faces
+        # (not body faces). These are the longitudinal top edges.
         edges = adsk.core.ObjectCollection.create()
-        for e in candidates:
-            if e.length >= max_len * 0.3:
-                edges.add(e)
+        for edge in top_face.edges:
+            # Check if the other face (not top_face) is a sweep face
+            other_is_sweep = False
+            for af in edge.faces:
+                if af.tempId != top_face.tempId and af.tempId in sweep_fids:
+                    other_is_sweep = True
+                    break
+            if other_is_sweep:
+                edges.add(edge)
+
+        _log(f'Chamfer: {edges.count} top-face edges bordering sweep faces')
 
         if edges.count == 0:
             return
