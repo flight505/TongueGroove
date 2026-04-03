@@ -141,14 +141,55 @@ Collects all edges from `groove_feature.faces`. Filters: length >= 30% of longes
 | Through-all extrude (one side) | `ThroughAllExtentDefinition.create()` | not `AllExtentDefinition.create()` |
 | Through-all extrude (both sides) | `ext_input.setAllExtent(SymmetricExtentDirection)` | not `AllExtentDefinition` |
 
+## Body Orientation Auto-Detection
+
+The add-in determines protrusion direction by comparing the groove body centroid
+against the face normal from `sketch.referencePlane`.
+
+    face_origin = centroid of the sketch's reference face
+    groove_centroid = bounding box center of the groove body
+    direction_to_groove = groove_centroid - face_origin
+    dot = dot(direction_to_groove, face_normal)
+
+    if dot >= 0: groove is on face-normal side → profile direction = face normal (default)
+    if dot < 0:  groove is opposite → flip face normal
+
+This works when:
+- Centreline is drawn on the tongue body's face (face normal points toward groove)
+- Both bodies are adjacent to the sketch face
+- The centreline connects to both body edges
+
+This FAILS when:
+- Centreline is drawn on the groove body's face (face normal points away from tongue)
+- The user swaps tongue/groove selection from the body that owns the sketch face
+- The bodies are not symmetric relative to the face
+
+Root cause: `face.evaluator.getNormalAtPoint()` returns the outward normal of the face's
+**owning body**. If the sketch face belongs to body A, the normal points away from A.
+When the user selects body A as "groove" and body B as "tongue," the normal points away
+from the groove body — the dot product gives the wrong sign.
+
+**Current workaround**: tooltips tell the user to draw the centreline on the tongue body.
+
+**Future fix**: detect which body owns the sketch face. If the owner is the groove body
+(not the tongue body), additionally flip the normal. This requires comparing
+`sketch.referencePlane` (cast to BRepFace) against the selected tongue/groove bodies
+to determine ownership. Pseudocode:
+
+    face = BRepFace.cast(sketch.referencePlane)
+    if face and face.body == groove_body:
+        # Centreline is on the groove body → normal points away from groove
+        # Flip so it points toward groove (same as standard case)
+        face_normal = -face_normal
+
 ## Open Issues
 
-1. **End trim "No target body"** — the DistanceExtentDefinition approach with 1.5x oversize should fix this but is untested as of this writing. If the extrude still misses, the problem is that the path tangent direction at the trim point doesn't intersect the tongue body. Potential fix: use `setAllExtent(Symmetric)` but that risks cutting too much.
+1. **Chamfer too large** — if chamfer size >= half the tongue's shortest edge, it fails. The auto-retry at 50% helps. Could also pre-compute max safe chamfer from tongue height and width.
 
-2. **Chamfer too large** — if chamfer size >= half the tongue's shortest edge, it fails. The auto-retry at 50% helps. Could also pre-compute max safe chamfer from tongue height and width.
+2. **Path direction ambiguity** — "Start" and "End" are defined by sketch curve parameterization. No UI hint. User must trial-and-error.
 
-3. **Path direction ambiguity** — "Start" and "End" are defined by sketch curve parameterization. No UI hint. User must trial-and-error.
+3. **distanceOne has no effect on Cut sweeps** — verified by diagnostic. Groove uses full sweep + fill-back instead.
 
-4. **distanceOne exact semantics** — tested as fraction of forward-available path from profile. Works in practice. Formula: `d1 = (1 - start_frac - end_frac) / (1 - start_frac)`.
+4. **Curve trim accuracy** — the trim extrude is a flat slab perpendicular to the path tangent at the trim point. For tight curves, this flat cut doesn't follow the curve precisely. Acceptable for gaps < 3mm.
 
-5. **Curve trim accuracy** — the trim extrude is a flat slab perpendicular to the path tangent at the trim point. For tight curves, this flat cut doesn't follow the curve precisely. Acceptable for gaps < 3mm.
+5. **Body orientation when centreline is not on tongue body** — see "Body Orientation Auto-Detection" section above. Current workaround: tooltips. Future fix documented.

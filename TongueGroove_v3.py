@@ -113,17 +113,20 @@ class _OnCommandCreated(adsk.core.CommandCreatedEventHandler):
 
             # Selections
             sp = inp.addSelectionInput('sel_path', 'Centreline Path',
-                                       'Select sketch curve(s) for the joint centreline')
+                                       'Select sketch curve(s) drawn on the TONGUE body face. '
+                                       'The tongue protrudes from this face toward the groove body.')
             sp.addSelectionFilter('SketchCurves')
             sp.setSelectionLimits(1, 0)
 
             st = inp.addSelectionInput('sel_tongue', 'Tongue Body',
-                                       'Body that receives the tongue protrusion')
+                                       'The body the centreline is drawn on. '
+                                       'The tongue protrusion will be added to this body.')
             st.addSelectionFilter('SolidBodies')
             st.setSelectionLimits(1, 1)
 
             sg = inp.addSelectionInput('sel_groove', 'Groove Body',
-                                       'Body that receives the groove cut')
+                                       'The opposite body. A matching groove channel '
+                                       'will be cut into this body.')
             sg.addSelectionFilter('SolidBodies')
             sg.setSelectionLimits(1, 1)
 
