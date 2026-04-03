@@ -348,18 +348,22 @@ def _generate(inputs):
         _chamfer_top(root, tongue_feat, chamfer_cm)
 
     # ---- GROOVE ----
+    # Full sweep cut, then fill-back at each end.
+    # distanceOne does NOT work for Cut sweeps (confirmed by diagnostic).
     _log('--- GROOVE ---')
-    g_start_frac = g_start / total_len if g_start > 0 else 0.0
-    g_end_frac   = g_end / total_len if g_end > 0 else 0.0
-    _log(f'groove start_frac={g_start_frac:.4f} end_frac={g_end_frac:.4f}')
-    groove_feat = _partial_sweep(
+    groove_hw = width_cm / 2.0 + side_clear_cm
+    groove_h  = height_cm + bottom_clear_cm
+    groove_feat = _full_sweep(
         root, sweep_path, face_normal,
-        half_w=width_cm / 2.0 + side_clear_cm,
-        h=height_cm + bottom_clear_cm,
+        half_w=groove_hw, h=groove_h,
         body=groove_body,
-        op=adsk.fusion.FeatureOperations.CutFeatureOperation,
-        start_frac=g_start_frac,
-        end_frac=g_end_frac)
+        op=adsk.fusion.FeatureOperations.CutFeatureOperation)
+
+    _fill_groove_ends(root, sweep_path, face_normal,
+                      half_w=groove_hw, h=groove_h,
+                      body=groove_body,
+                      start_gap_cm=g_start, end_gap_cm=g_end,
+                      total_len=total_len)
 
     if fillet_cm > 0 and groove_feat:
         _fillet_corners(root, groove_feat, fillet_cm)
@@ -572,6 +576,66 @@ def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start, 
             _log(f'Trim {side}: extrude returned null')
     except:
         _log(f'Trim cut failed (non-critical):\n{traceback.format_exc()}')
+
+
+# ---------------------------------------------------------------------------
+# Groove end fill-back (fill the groove channel at each end with Join)
+# ---------------------------------------------------------------------------
+def _fill_groove_ends(root, path, face_normal, half_w, h, body,
+                      start_gap_cm, end_gap_cm, total_len):
+    """Fill the groove channel at each end by extruding a Join.
+
+    After a full groove sweep (which cuts the full path), we fill material
+    back into the groove at each end where a gap is needed. This shortens
+    the groove channel from each end by gap_cm.
+
+    Confirmed by diagnostic: extrude-Join from a plane on the path works.
+    Direction: Positive = along path tangent, Negative = against.
+    At the start (plane at gap_frac), Negative fills toward X=0.
+    At the end (plane at 1-gap_frac), Positive fills toward X=max.
+    """
+    if start_gap_cm > 0:
+        frac = start_gap_cm / total_len
+        _log(f'Fill groove start: gap={start_gap_cm * 10:.2f}mm → frac={frac:.4f}')
+        _fill_one_end(root, path, face_normal, half_w, h, body,
+                      frac, gap_cm=start_gap_cm, toward_start=True)
+
+    if end_gap_cm > 0:
+        frac = 1.0 - (end_gap_cm / total_len)
+        _log(f'Fill groove end: gap={end_gap_cm * 10:.2f}mm → frac={frac:.4f}')
+        _fill_one_end(root, path, face_normal, half_w, h, body,
+                      frac, gap_cm=end_gap_cm, toward_start=False)
+
+
+def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward_start):
+    """Extrude-Join from a plane at frac toward the nearest path endpoint."""
+    try:
+        side = 'START' if toward_start else 'END'
+        plane = _make_profile_plane(root, path, frac)
+        _, prof = _draw_rect(root, plane, face_normal, half_w, h)
+        if prof is None:
+            _log(f'Fill {side}: no profile created')
+            return
+
+        extrudes = root.features.extrudeFeatures
+        ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.JoinFeatureOperation)
+
+        # Fill distance = gap + small margin to ensure full coverage
+        fill_dist = gap_cm + 0.01  # cm
+        # Negative = toward path start, Positive = toward path end
+        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
+                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(fill_dist))
+        ext_input.setOneSideExtent(dist_def, direction)
+        ext_input.participantBodies = [body]
+
+        feat = extrudes.add(ext_input)
+        if feat:
+            _log(f'Fill {side}: succeeded (dist={fill_dist * 10:.2f}mm)')
+        else:
+            _log(f'Fill {side}: extrude returned null')
+    except:
+        _log(f'Fill failed (non-critical):\n{traceback.format_exc()}')
 
 
 
