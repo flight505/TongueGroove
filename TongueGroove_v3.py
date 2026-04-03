@@ -132,21 +132,26 @@ class _OnCommandCreated(adsk.core.CommandCreatedEventHandler):
             inp.addValueInput('val_width',  'Tongue Width',  'mm', adsk.core.ValueInput.createByString('6 mm'))
             inp.addValueInput('val_height', 'Tongue Height', 'mm', adsk.core.ValueInput.createByString('3 mm'))
 
-            # Tolerances
-            inp.addTextBoxCommandInput('_t', '', '<b>Tolerances</b>', 1, True)
-            inp.addValueInput('val_lat_clear',   'Lateral Clearance (per side)', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
-            inp.addValueInput('val_depth_clear',  'Depth Clearance',             'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            # Fit Clearance
+            inp.addTextBoxCommandInput('_t', '', '<b>Fit Clearance</b>', 1, True)
+            inp.addValueInput('val_side_clear', 'Side Clearance (per side)', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            inp.addValueInput('val_bottom_clear', 'Bottom Clearance', 'mm', adsk.core.ValueInput.createByString('0.15 mm'))
+            inp.addValueInput('val_end_clear', 'End Clearance (per end)', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
 
-            # End gaps
-            inp.addTextBoxCommandInput('_g', '', '<b>End Gaps</b>', 1, True)
-            dd = inp.addDropDownCommandInput('dd_gap_mode', 'Apply To',
-                                             adsk.core.DropDownStyles.TextListDropDownStyle)
-            dd.listItems.add('Both ends', True)
-            dd.listItems.add('Start only', False)
-            dd.listItems.add('End only', False)
-            dd.listItems.add('None', False)
-            inp.addValueInput('val_tongue_gap', 'Tongue Gap (per end)', 'mm', adsk.core.ValueInput.createByString('0.2 mm'))
-            inp.addValueInput('val_groove_gap', 'Groove Gap (per end)', 'mm', adsk.core.ValueInput.createByString('0 mm'))
+            # End Behaviour
+            inp.addTextBoxCommandInput('_g', '', '<b>End Behaviour</b>', 1, True)
+            dd_start = inp.addDropDownCommandInput('dd_start_end', 'Path Start',
+                                                    adsk.core.DropDownStyles.TextListDropDownStyle)
+            dd_start.listItems.add('Flush', True)
+            dd_start.listItems.add('Inset', False)
+
+            dd_end = inp.addDropDownCommandInput('dd_end_end', 'Path End',
+                                                  adsk.core.DropDownStyles.TextListDropDownStyle)
+            dd_end.listItems.add('Flush', True)
+            dd_end.listItems.add('Inset', False)
+
+            inp.addValueInput('val_inset', 'Inset Distance', 'mm',
+                              adsk.core.ValueInput.createByString('0.5 mm')).isVisible = False
 
             # Options
             inp.addTextBoxCommandInput('_o', '', '<b>Options</b>', 1, True)
@@ -172,7 +177,11 @@ class _OnInputChanged(adsk.core.InputChangedEventHandler):
         try:
             ea = adsk.core.InputChangedEventArgs.cast(args)
             changed, inputs = ea.input, ea.inputs
-            if changed.id == 'bool_chamfer':
+            if changed.id in ('dd_start_end', 'dd_end_end'):
+                s = adsk.core.DropDownCommandInput.cast(inputs.itemById('dd_start_end')).selectedItem.name
+                e = adsk.core.DropDownCommandInput.cast(inputs.itemById('dd_end_end')).selectedItem.name
+                inputs.itemById('val_inset').isVisible = (s == 'Inset' or e == 'Inset')
+            elif changed.id == 'bool_chamfer':
                 inputs.itemById('val_chamfer').isVisible = adsk.core.BoolValueCommandInput.cast(changed).value
             elif changed.id == 'bool_fillet':
                 enabled = adsk.core.BoolValueCommandInput.cast(changed).value
@@ -195,8 +204,7 @@ class _OnValidate(adsk.core.ValidateInputsEventHandler):
                   adsk.core.SelectionCommandInput.cast(inp.itemById('sel_groove')).selectionCount == 1 and
                   adsk.core.ValueCommandInput.cast(inp.itemById('val_width')).value > 0 and
                   adsk.core.ValueCommandInput.cast(inp.itemById('val_height')).value > 0 and
-                  adsk.core.ValueCommandInput.cast(inp.itemById('val_tongue_gap')).value >= 0 and
-                  adsk.core.ValueCommandInput.cast(inp.itemById('val_groove_gap')).value >= 0)
+                  adsk.core.ValueCommandInput.cast(inp.itemById('val_end_clear')).value >= 0)
             ea.areInputsValid = ok
         except:
             pass
@@ -241,15 +249,17 @@ def _generate(inputs):
         adsk.core.SelectionCommandInput.cast(inputs.itemById('sel_groove')).selection(0).entity)
 
     # Read values
-    width_cm      = _read_val(inputs, 'val_width')
-    height_cm     = _read_val(inputs, 'val_height')
-    lat_clear_cm  = _read_val(inputs, 'val_lat_clear')
-    depth_clear_cm = _read_val(inputs, 'val_depth_clear')
-    tongue_gap_cm = _read_val(inputs, 'val_tongue_gap')
-    groove_gap_cm = _read_val(inputs, 'val_groove_gap')
+    width_cm       = _read_val(inputs, 'val_width')
+    height_cm      = _read_val(inputs, 'val_height')
+    side_clear_cm   = _read_val(inputs, 'val_side_clear')
+    bottom_clear_cm = _read_val(inputs, 'val_bottom_clear')
+    end_clear_cm    = _read_val(inputs, 'val_end_clear')
+    inset_cm        = _read_val(inputs, 'val_inset')
 
-    gap_mode = adsk.core.DropDownCommandInput.cast(
-        inputs.itemById('dd_gap_mode')).selectedItem.name
+    start_mode = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById('dd_start_end')).selectedItem.name  # 'Flush' or 'Inset'
+    end_mode = adsk.core.DropDownCommandInput.cast(
+        inputs.itemById('dd_end_end')).selectedItem.name
 
     do_chamfer = adsk.core.BoolValueCommandInput.cast(inputs.itemById('bool_chamfer')).value
     chamfer_cm = _read_val(inputs, 'val_chamfer') if do_chamfer else 0.0
@@ -262,29 +272,66 @@ def _generate(inputs):
     if not curves:
         raise ValueError('No path curves selected.')
 
-    sketch    = curves[0].parentSketch
-    total_len = sum(c.length for c in curves)
+    sketch = curves[0].parentSketch
 
-    # Resolve gap mode → per-end gap distances (cm)
-    def _gap(gap_cm):
-        """Return (start_gap_cm, end_gap_cm) based on mode."""
-        if gap_mode == 'Both ends':    return gap_cm, gap_cm
-        elif gap_mode == 'Start only': return gap_cm, 0.0
-        elif gap_mode == 'End only':   return 0.0, gap_cm
-        else:                          return 0.0, 0.0
+    # Path length must match what _make_path actually uses
+    if len(curves) == 1:
+        all_connected = sketch.findConnectedCurves(curves[0])
+        total_len = sum(all_connected.item(i).length for i in range(all_connected.count))
+    else:
+        total_len = sum(c.length for c in curves)
 
-    tongue_total = tongue_gap_cm + groove_gap_cm
-    t_start, t_end = _gap(tongue_total)
-    g_start, g_end = _gap(groove_gap_cm)
+    # Resolve per-end behaviour:
+    #   Flush  → joint goes to path endpoint, no clearance (open edge, nothing to bottom out against)
+    #   Inset  → joint pulls back, end clearance applies (groove has a wall, tongue must not bottom out)
+    #
+    # End clearance only at Inset ends (where the groove has an end wall).
+    # Flush ends: tongue = 0, groove = 0 (both go to the edge).
+    inset_start = inset_cm if start_mode == 'Inset' else 0.0
+    inset_end   = inset_cm if end_mode == 'Inset' else 0.0
+
+    t_start = inset_start + (end_clear_cm if start_mode == 'Inset' else 0.0)
+    t_end   = inset_end + (end_clear_cm if end_mode == 'Inset' else 0.0)
+    g_start = inset_start
+    g_end   = inset_end
+
+    _log(f'total_len={total_len * 10:.2f}mm  end_clear={end_clear_cm * 10:.2f}mm')
+    _log(f'start_mode={start_mode} (inset={inset_start * 10:.2f}mm)  '
+         f'end_mode={end_mode} (inset={inset_end * 10:.2f}mm)')
+    _log(f'tongue: start={t_start * 10:.2f}mm  end={t_end * 10:.2f}mm')
+    _log(f'groove: start={g_start * 10:.2f}mm  end={g_end * 10:.2f}mm')
 
     if t_start + t_end >= total_len * 0.95:
-        raise ValueError('Tongue gaps exceed path length.')
+        raise ValueError(
+            f'Tongue insets ({(t_start + t_end) * 10:.1f}mm) exceed '
+            f'95% of path length ({total_len * 10:.1f}mm).')
+
+    # ---- Pre-flight validation ----
+    # Check tongue width against body bounding box at the face
+    ref = sketch.referencePlane
+    face = adsk.fusion.BRepFace.cast(ref)
+    if face:
+        bb = face.boundingBox
+        face_width = max(
+            bb.maxPoint.x - bb.minPoint.x,
+            bb.maxPoint.y - bb.minPoint.y,
+            bb.maxPoint.z - bb.minPoint.z)
+        if width_cm > face_width:
+            raise ValueError(
+                f'Tongue width ({width_cm * 10:.1f}mm) exceeds the face '
+                f'dimension ({face_width * 10:.1f}mm). Reduce tongue width.')
+        _log(f'Face bounding box max dimension: {face_width * 10:.1f}mm')
+
+    if chamfer_cm > 0 and chamfer_cm >= height_cm * 0.5:
+        _log(f'WARNING: chamfer ({chamfer_cm * 10:.1f}mm) is >= 50% of tongue height '
+             f'({height_cm * 10:.1f}mm) — may fail')
 
     # Build path + face normal
     sweep_path  = _make_path(curves)
     face_normal = _face_normal(sketch)
 
     # ---- TONGUE ----
+    _log('--- TONGUE ---')
     tongue_feat = _full_sweep(
         root, sweep_path, face_normal,
         half_w=width_cm / 2.0, h=height_cm,
@@ -301,20 +348,22 @@ def _generate(inputs):
         _chamfer_top(root, tongue_feat, chamfer_cm)
 
     # ---- GROOVE ----
+    # Full sweep cut, then fill-back at each end.
+    # distanceOne does NOT work for Cut sweeps (confirmed by diagnostic).
+    _log('--- GROOVE ---')
+    groove_hw = width_cm / 2.0 + side_clear_cm
+    groove_h  = height_cm + bottom_clear_cm
     groove_feat = _full_sweep(
         root, sweep_path, face_normal,
-        half_w=width_cm / 2.0 + lat_clear_cm,
-        h=height_cm + depth_clear_cm,
+        half_w=groove_hw, h=groove_h,
         body=groove_body,
         op=adsk.fusion.FeatureOperations.CutFeatureOperation)
 
-    if g_start > 0 or g_end > 0:
-        _trim_groove_ends(root, sweep_path, face_normal,
-                          half_w=width_cm / 2.0 + lat_clear_cm,
-                          h=height_cm + depth_clear_cm,
-                          body=groove_body,
-                          start_gap_cm=g_start, end_gap_cm=g_end,
-                          total_len=total_len)
+    _fill_groove_ends(root, sweep_path, face_normal,
+                      half_w=groove_hw, h=groove_h,
+                      body=groove_body,
+                      start_gap_cm=g_start, end_gap_cm=g_end,
+                      total_len=total_len)
 
     if fillet_cm > 0 and groove_feat:
         _fillet_corners(root, groove_feat, fillet_cm)
@@ -324,14 +373,29 @@ def _generate(inputs):
 # Path + geometry
 # ---------------------------------------------------------------------------
 def _make_path(curves):
-    """Create sweep Path from selected SketchCurves."""
+    """Create sweep Path from selected SketchCurves.
+
+    If 1 curve selected: findConnectedCurves auto-chains the full path.
+    If 2+ curves selected: uses exactly those curves (user's explicit choice).
+    """
     if len(curves) == 1:
+        sketch = curves[0].parentSketch
+        connected = sketch.findConnectedCurves(curves[0])
+        _log(f'Path: 1 selected → findConnectedCurves found {connected.count} curves')
+        if connected.count == 1:
+            return adsk.fusion.Path.create(
+                connected.item(0),
+                adsk.fusion.ChainedCurveOptions.connectedChainedCurves)
         return adsk.fusion.Path.create(
-            curves[0], adsk.fusion.ChainedCurveOptions.connectedChainedCurves)
-    col = adsk.core.ObjectCollection.create()
-    for c in curves:
-        col.add(c)
-    return adsk.fusion.Path.create(col, adsk.fusion.ChainedCurveOptions.noChainedCurves)
+            connected,
+            adsk.fusion.ChainedCurveOptions.noChainedCurves)
+    else:
+        _log(f'Path: {len(curves)} curves explicitly selected')
+        col = adsk.core.ObjectCollection.create()
+        for c in curves:
+            col.add(c)
+        return adsk.fusion.Path.create(
+            col, adsk.fusion.ChainedCurveOptions.noChainedCurves)
 
 
 def _face_normal(sketch):
@@ -354,8 +418,12 @@ def _make_profile_plane(root, path, frac):
     return root.constructionPlanes.add(inp)
 
 
-def _draw_rect(root, plane, face_normal, half_w, h):
-    """Draw oriented rectangle on a construction plane. Returns (sketch, profile)."""
+def _draw_rect(root, plane, face_normal, half_w, h, invert_height=False):
+    """Draw oriented rectangle on a construction plane. Returns (sketch, profile).
+
+    invert_height: if True, height goes opposite to face normal (into the body).
+    Used for groove fill profiles that must not extend above the face.
+    """
     sk = root.sketches.add(plane)
     pg = plane.geometry
     u, v = pg.uDirection, pg.vDirection
@@ -363,12 +431,14 @@ def _draw_rect(root, plane, face_normal, half_w, h):
     u_dot = u.x*face_normal.x + u.y*face_normal.y + u.z*face_normal.z
     v_dot = v.x*face_normal.x + v.y*face_normal.y + v.z*face_normal.z
 
+    flip = -1.0 if invert_height else 1.0
+
     if abs(v_dot) >= abs(u_dot):
-        sign = 1.0 if v_dot > 0 else -1.0
+        sign = (1.0 if v_dot > 0 else -1.0) * flip
         p1 = adsk.core.Point3D.create(-half_w, 0, 0)
         p2 = adsk.core.Point3D.create(half_w, sign * h, 0)
     else:
-        sign = 1.0 if u_dot > 0 else -1.0
+        sign = (1.0 if u_dot > 0 else -1.0) * flip
         p1 = adsk.core.Point3D.create(0, -half_w, 0)
         p2 = adsk.core.Point3D.create(sign * h, half_w, 0)
 
@@ -400,8 +470,45 @@ def _full_sweep(root, path, face_normal, half_w, h, body, op):
     return feat
 
 
+def _partial_sweep(root, path, face_normal, half_w, h, body, op,
+                   start_frac=0.0, end_frac=0.0):
+    """Create a sweep that starts at start_frac and clips the end at end_frac.
+
+    For Cut operations, profile placement reliably clips the start because
+    the cut simply doesn't happen where the sweep hasn't reached.
+    distanceOne clips the end.
+    """
+    plane = _make_profile_plane(root, path, start_frac)
+    _, prof = _draw_rect(root, plane, face_normal, half_w, h)
+    if prof is None:
+        raise RuntimeError('Failed to create sweep profile.')
+
+    sweeps = root.features.sweepFeatures
+    si = sweeps.createInput(prof, path, op)
+    si.orientation = adsk.fusion.SweepOrientationTypes.PerpendicularOrientationType
+    si.participantBodies = [body]
+
+    # distanceOne clips the far end — fraction of forward-available path
+    if end_frac > 0.001:
+        sweep_range = 1.0 - start_frac - end_frac
+        forward = 1.0 - start_frac
+        d1 = sweep_range / forward if forward > 0.01 else 1.0
+        d1 = min(d1, 1.0)
+        si.distanceOne = _vi(d1)
+        _log(f'Partial sweep: d1={d1:.4f} (sweep_range={sweep_range:.4f}, forward={forward:.4f})')
+    else:
+        _log(f'Partial sweep: d1=1.0 (full forward, no end clip)')
+
+    feat = sweeps.add(si)
+    if feat is None:
+        raise RuntimeError('Partial sweep returned null.')
+    if feat.healthState == adsk.fusion.FeatureHealthStates.ErrorFeatureHealthState:
+        raise RuntimeError(f'Partial sweep failed: {feat.errorOrWarningMessage}')
+    return feat
+
+
 # ---------------------------------------------------------------------------
-# End-gap trimming
+# End-gap trimming (tongue only — groove uses _partial_sweep)
 # ---------------------------------------------------------------------------
 def _trim_ends(root, path, face_normal, half_w, h, body,
                start_gap_cm, end_gap_cm, total_len):
@@ -415,80 +522,124 @@ def _trim_ends(root, path, face_normal, half_w, h, body,
     """
     if start_gap_cm > 0:
         frac = start_gap_cm / total_len
-        _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=True)
+        _log(f'Trim tongue start: gap={start_gap_cm * 10:.2f}mm → frac={frac:.4f} '
+             f'(absolute={frac * total_len * 10:.2f}mm from start)')
+        _trim_one_end(root, path, face_normal, half_w, h, body, frac,
+                      toward_start=True, total_len=total_len)
 
     if end_gap_cm > 0:
         frac = 1.0 - (end_gap_cm / total_len)
-        _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=False)
+        _log(f'Trim tongue end: gap={end_gap_cm * 10:.2f}mm → frac={frac:.4f} '
+             f'(absolute={(1.0 - frac) * total_len * 10:.2f}mm from end)')
+        _trim_one_end(root, path, face_normal, half_w, h, body, frac,
+                      toward_start=False, total_len=total_len)
 
 
-def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
-    """Extrude-cut from the trim plane toward the nearest path endpoint."""
+def _trim_one_end(root, path, face_normal, half_w, h, body, frac, toward_start, total_len):
+    """Cut away tongue material between the trim plane and the path endpoint.
+
+    Uses exact gap distance — no margin, no overshoot.
+    Profile is oversized (1.5x) to fully cover the tongue cross-section.
+    """
     try:
+        side = 'START' if toward_start else 'END'
+        if toward_start:
+            gap_cm = frac * total_len
+        else:
+            gap_cm = (1.0 - frac) * total_len
+
+        _log(f'Trim {side}: frac={frac:.4f}, gap={gap_cm * 10:.2f}mm')
+
         plane = _make_profile_plane(root, path, frac)
-        _, prof = _draw_rect(root, plane, face_normal, half_w, h)
+        _, prof = _draw_rect(root, plane, face_normal, half_w * 1.5, h * 1.5)
         if prof is None:
-            _log('Trim: no profile created')
+            _log(f'Trim {side}: no profile created')
             return
 
         extrudes = root.features.extrudeFeatures
         ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.CutFeatureOperation)
 
-        # Extrude through-all in the direction toward the endpoint
-        all_extent = adsk.fusion.AllExtentDefinition.create()
-        if toward_start:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.NegativeExtentDirection)
-        else:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.PositiveExtentDirection)
-
+        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
+                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(gap_cm))
+        ext_input.setOneSideExtent(dist_def, direction)
         ext_input.participantBodies = [body]
-        extrudes.add(ext_input)
+
+        feat = extrudes.add(ext_input)
+        if feat:
+            _log(f'Trim {side}: cut succeeded (dist={gap_cm * 10:.2f}mm, '
+                 f'dir={"Neg" if toward_start else "Pos"})')
+        else:
+            _log(f'Trim {side}: extrude returned null')
     except:
         _log(f'Trim cut failed (non-critical):\n{traceback.format_exc()}')
 
 
-def _trim_groove_ends(root, path, face_normal, half_w, h, body,
+# ---------------------------------------------------------------------------
+# Groove end fill-back (fill the groove channel at each end with Join)
+# ---------------------------------------------------------------------------
+def _fill_groove_ends(root, path, face_normal, half_w, h, body,
                       start_gap_cm, end_gap_cm, total_len):
-    """Fill back groove material at ends by extruding Joins.
+    """Fill the groove channel at each end by extruding a Join.
 
-    The groove is a cut. To 'trim' it (make it shorter), we fill back the
-    cut material at the ends by joining material into the groove body.
+    After a full groove sweep (which cuts the full path), we fill material
+    back into the groove at each end where a gap is needed. This shortens
+    the groove channel from each end by gap_cm.
+
+    Confirmed by diagnostic: extrude-Join from a plane on the path works.
+    Direction: Positive = along path tangent, Negative = against.
+    At the start (plane at gap_frac), Negative fills toward X=0.
+    At the end (plane at 1-gap_frac), Positive fills toward X=max.
     """
     if start_gap_cm > 0:
         frac = start_gap_cm / total_len
-        _fill_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=True)
+        _log(f'Fill groove start: gap={start_gap_cm * 10:.2f}mm → frac={frac:.4f}')
+        _fill_one_end(root, path, face_normal, half_w, h, body,
+                      frac, gap_cm=start_gap_cm, toward_start=True)
 
     if end_gap_cm > 0:
         frac = 1.0 - (end_gap_cm / total_len)
-        _fill_one_end(root, path, face_normal, half_w, h, body, frac, toward_start=False)
+        _log(f'Fill groove end: gap={end_gap_cm * 10:.2f}mm → frac={frac:.4f}')
+        _fill_one_end(root, path, face_normal, half_w, h, body,
+                      frac, gap_cm=end_gap_cm, toward_start=False)
 
 
-def _fill_one_end(root, path, face_normal, half_w, h, body, frac, toward_start):
-    """Extrude-join from trim plane toward nearest endpoint to fill the groove."""
+def _fill_one_end(root, path, face_normal, half_w, h, body, frac, gap_cm, toward_start):
+    """Extrude-Join from a plane at frac toward the path endpoint.
+
+    Uses exact gap distance — no margin, no overshoot.
+    Negative = toward path start, Positive = toward path end.
+    """
     try:
+        side = 'START' if toward_start else 'END'
         plane = _make_profile_plane(root, path, frac)
+        # Same profile direction as the groove sweep (face normal direction).
+        # The groove channel is cut in the face normal direction, so the fill
+        # must also extend in the face normal direction to fill that channel.
         _, prof = _draw_rect(root, plane, face_normal, half_w, h)
         if prof is None:
-            _log('Fill: no profile created')
+            _log(f'Fill {side}: no profile created')
             return
 
         extrudes = root.features.extrudeFeatures
         ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.JoinFeatureOperation)
 
-        all_extent = adsk.fusion.AllExtentDefinition.create()
-        if toward_start:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.NegativeExtentDirection)
-        else:
-            ext_input.setOneSideExtent(all_extent,
-                                       adsk.fusion.ExtentDirections.PositiveExtentDirection)
-
+        direction = (adsk.fusion.ExtentDirections.NegativeExtentDirection if toward_start
+                     else adsk.fusion.ExtentDirections.PositiveExtentDirection)
+        dist_def = adsk.fusion.DistanceExtentDefinition.create(_vi(gap_cm))
+        ext_input.setOneSideExtent(dist_def, direction)
         ext_input.participantBodies = [body]
-        extrudes.add(ext_input)
+
+        feat = extrudes.add(ext_input)
+        if feat:
+            _log(f'Fill {side}: succeeded (dist={gap_cm * 10:.2f}mm, '
+                 f'dir={"Neg" if toward_start else "Pos"})')
+        else:
+            _log(f'Fill {side}: extrude returned null')
     except:
         _log(f'Fill failed (non-critical):\n{traceback.format_exc()}')
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -528,8 +679,23 @@ def _chamfer_top(root, sweep_feat, chamfer_cm):
 
         ch = root.features.chamferFeatures
         ci = ch.createInput2()
-        ci.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edges, _vi(chamfer_cm), True)
-        ch.add(ci)
+        ci.chamferEdgeSets.addEqualDistanceChamferEdgeSet(edges, _vi(chamfer_cm), False)
+        try:
+            ch.add(ci)
+            _log(f'Chamfer applied: {chamfer_cm * 10:.2f}mm on {edges.count} edges')
+        except RuntimeError as e:
+            if 'UNFIN_SHEET' in str(e) or 'Compute Failed' in str(e):
+                _log(f'Chamfer too large ({chamfer_cm * 10:.1f}mm), trying half size...')
+                ci2 = ch.createInput2()
+                ci2.chamferEdgeSets.addEqualDistanceChamferEdgeSet(
+                    edges, _vi(chamfer_cm * 0.5), False)
+                try:
+                    ch.add(ci2)
+                    _log(f'Chamfer applied at reduced size: {chamfer_cm * 5:.2f}mm')
+                except:
+                    _log(f'Chamfer failed even at reduced size — skipping')
+            else:
+                raise
     except:
         _log(f'Chamfer failed (non-critical):\n{traceback.format_exc()}')
 
