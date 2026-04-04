@@ -2,7 +2,7 @@
 
 ## Project
 
-Single-file Fusion 360 Python add-in (`TongueGroove_v3.py`) that creates parametric tongue-and-groove joints between two solid bodies along a sketch centreline path. Designed for FDM 3D printing with configurable tolerances.
+Single-file Fusion 360 Python add-in (`TongueGroove_v3.py`) that creates parametric tongue-and-groove joints between two solid bodies along a sketch centreline path. Designed for FDM 3D printing with configurable fit clearances.
 
 ## Stack
 
@@ -12,49 +12,56 @@ Single-file Fusion 360 Python add-in (`TongueGroove_v3.py`) that creates paramet
 
 ## Deployment
 
-The add-in runs from `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/TongueGroove/`. The deploy script copies files there:
-
 ```bash
 bash deploy.sh
 ```
 
-The file must be named `TongueGroove.py` in the AddIns directory (no `&` — Fusion's JS command registry fails on special characters in folder names).
+Copies to `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/TongueGroove/`.
+File must be named `TongueGroove.py` in AddIns (no `&` in folder names).
 
 ## Key Files
 
-- `TongueGroove_v3.py` — the add-in source (deployed as `TongueGroove.py`)
-- `deploy.sh` — copies files to Fusion AddIns directory
-- `ARCHITECTURE.md` — how the code works, order of operations, known issues, failed approaches
-- `PROJECT_SUMMARY.md` — historical development notes from v1
-
-## Critical Fusion API Gotchas
-
-Read ARCHITECTURE.md "API Methods That Don't Work As Expected" before making changes. The three most important:
-
-1. **SWIG requires plain Python `list`** for `participantBodies`, `createOffsetInput` curves, and other `std::vector` params — NOT `ObjectCollection`
-2. **`ThroughAllExtentDefinition.create()`** for one-sided through-all extrude — NOT `AllExtentDefinition.create()` (doesn't exist)
-3. **`CurveEvaluator3D.getParameterExtents()`** returns `(bool, float, float)` — NOT `.parametricRange()` (doesn't exist on curves)
+| File | Purpose |
+|------|---------|
+| `TongueGroove_v3.py` | Add-in source (deployed as `TongueGroove.py`) |
+| `Resources/` | Icons (16/32/64px), toolclip (300x200), help.html |
+| `deploy.sh` | Copy files to Fusion AddIns directory |
+| `ARCHITECTURE.md` | Operation sequence, verified API facts, open issues |
+| `PROJECT_SUMMARY.md` | Historical v1 development notes |
 
 ## Before Writing Code
 
-Use the `fusion360-scripting` skill (installed in `.claude/skills/`) to verify ANY Fusion API method before using it. Grep the Python stubs at:
+1. Use the `fusion360-scripting` skill (`.claude/skills/`) — check `verified-findings.md` first
+2. Grep the Python stubs for exact method signatures before using any Fusion API method
+3. Write diagnostic scripts to test uncertain behaviour — don't guess
+4. SWIG requires plain Python `list` for `participantBodies` and similar — NOT `ObjectCollection`
 
-```
-/Users/jesper/Library/Application Support/Autodesk/webdeploy/production/*/Autodesk Fusion.app/Contents/Api/Python/packages/adsk/fusion.py
-```
+## Critical Operation Order
 
-Do not trust training data for Fusion 360 API signatures.
+Tongue: sweep → **chamfer** → trim cuts (chamfer before trims — sweep faces go stale after trims)
+Groove: sweep → fill-back (distanceOne doesn't work for Cut sweeps)
 
-## Current Status
+## Orientation Detection
 
-v3 — sweep-based architecture. Core sweep works for all path types. Known issues with end gap trimming (see ARCHITECTURE.md). The chamfer correctly excludes body boundary edges. Fillet filters to longitudinal edges.
+The centreline should be drawn on the **tongue body** face. The add-in auto-detects
+protrusion direction by checking which side of the face the groove body is on.
+This fails when the centreline is on the groove body's face.
+
+Future fix documented in ARCHITECTURE.md: check `face.body == groove_body`.
+
+## End Behaviour
+
+- **Inset** (default): end clearance applied. Use when path stops inside the body.
+- **Flush**: no clearance. Use only when path exits through a body edge.
+- End clearance is a fit tolerance (like side clearance) — always applied at Inset ends.
 
 ## Testing
 
 No automated tests. Test manually in Fusion 360:
-1. Straight line on a flat face
-2. Arc/spline on a flat face
-3. Multi-segment connected path (line + arc + line)
-4. End gaps with various "Apply To" modes
-5. Chamfer and fillet toggles
-6. Cancel → verify clean rollback
+1. Straight line on a flat face (basic case)
+2. Multi-segment curved path (line + arc + line)
+3. Path connecting both body edges perpendicular
+4. End Behaviour: Flush/Flush, Inset/Inset, mixed
+5. Chamfer on straight and curved paths
+6. Fillet on groove
+7. Cancel → verify clean rollback
