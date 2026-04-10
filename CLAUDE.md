@@ -2,7 +2,7 @@
 
 ## Project
 
-Single-file Fusion 360 Python add-in (`TongueGroove_v3.py`) that creates parametric tongue-and-groove joints between two solid bodies along a sketch centreline path. Designed for FDM 3D printing with configurable fit clearances.
+Single-file Fusion 360 Python add-in (`TongueGroove.py`) that creates parametric tongue-and-groove joints between two solid bodies along a sketch centreline path. Designed for FDM 3D printing with configurable fit clearances.
 
 ## Stack
 
@@ -16,14 +16,14 @@ Single-file Fusion 360 Python add-in (`TongueGroove_v3.py`) that creates paramet
 bash deploy.sh
 ```
 
-Copies to `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/TongueGroove/`.
-File must be named `TongueGroove.py` in AddIns (no `&` in folder names).
+Symlinks the source folder into `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/TongueGroove/`.
+Edits to `TongueGroove.py` are picked up by Fusion after reloading the add-in — no need to re-run deploy.sh.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `TongueGroove_v3.py` | Add-in source (deployed as `TongueGroove.py`) |
+| `TongueGroove.py` | Add-in source |
 | `Resources/` | Icons (16/32/64px), toolclip (300x200), help.html |
 | `deploy.sh` | Copy files to Fusion AddIns directory |
 | `ARCHITECTURE.md` | Operation sequence, verified API facts, open issues |

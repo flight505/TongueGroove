@@ -42,7 +42,21 @@ def _vi(cm: float) -> adsk.core.ValueInput:
 
 
 def _log(msg: str):
-    adsk.core.Application.get().log(f'{CMD_NAME}: {msg}')
+    # Dev debug logging is disabled. Change to a no-op — all existing call
+    # sites still work but produce no output. For committed-operation logging
+    # use _log_commit() instead.
+    pass
+
+
+def _log_commit(**fields) -> None:
+    """Log committed operation parameters as a single-line summary.
+
+    Format: [TongueGroove] key=value key=value ...
+    Purpose: reproducibility — lets you scroll back in Text Commands to find
+    exact params from a previous operation.
+    """
+    parts = [f'{k}={v}' for k, v in fields.items() if v not in (None, '', False)]
+    adsk.core.Application.get().log('[TongueGroove] ' + ' '.join(parts))
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +79,17 @@ def run(context):
         cmdDef.commandCreated.add(handler)
         _handlers.append(handler)
 
-        panel = (ui.allToolbarPanels.itemById('SolidModifyPanel') or
-                 ui.allToolbarPanels.itemById('SolidScriptsAddinsPanel'))
+        # Add to shared "3D Print Tools" panel on the Solid tab
+        workspace = ui.workspaces.itemById('FusionSolidEnvironment')
+        solid_tab = workspace.toolbarTabs.itemById('SolidTab')
+        panel = solid_tab.toolbarPanels.itemById('flight505_3DPrintTools_panel')
+        if not panel:
+            panel = solid_tab.toolbarPanels.add(
+                'flight505_3DPrintTools_panel',
+                '3D Print Tools',
+                'SolidModifyPanel',
+                False,
+            )
         if panel:
             ctrl = panel.controls.addCommand(cmdDef)
             ctrl.isPromotedByDefault = True
@@ -87,13 +110,17 @@ def stop(context):
         ui  = app.userInterface
         _log('stop() starting...')
 
-        for pid in ('SolidModifyPanel', 'SolidScriptsAddinsPanel'):
+        # Remove from shared "3D Print Tools" panel (and legacy panels for safety)
+        for pid in ('flight505_3DPrintTools_panel', 'SolidModifyPanel', 'SolidScriptsAddinsPanel'):
             panel = ui.allToolbarPanels.itemById(pid)
             if panel:
                 ctrl = panel.controls.itemById(CMD_ID)
                 if ctrl:
                     ctrl.deleteMe()
                     _log(f'button removed from "{pid}"')
+                # If shared panel is now empty, remove it
+                if pid == 'flight505_3DPrintTools_panel' and panel.controls.count == 0:
+                    panel.deleteMe()
 
         cmdDef = ui.commandDefinitions.itemById(CMD_ID)
         if cmdDef:
@@ -292,7 +319,28 @@ class _OnPreview(adsk.core.CommandEventHandler):
 class _OnExecute(adsk.core.CommandEventHandler):
     def notify(self, args):
         try:
-            _generate(adsk.core.CommandEventArgs.cast(args).command.commandInputs)
+            inputs = adsk.core.CommandEventArgs.cast(args).command.commandInputs
+            _generate(inputs)
+            # Log committed params on success for reproducibility
+            try:
+                do_chamfer = adsk.core.BoolValueCommandInput.cast(inputs.itemById('bool_chamfer')).value
+                do_fillet = adsk.core.BoolValueCommandInput.cast(inputs.itemById('bool_fillet')).value
+                start_mode = adsk.core.DropDownCommandInput.cast(inputs.itemById('dd_start_end')).selectedItem.name
+                end_mode = adsk.core.DropDownCommandInput.cast(inputs.itemById('dd_end_end')).selectedItem.name
+                _log_commit(
+                    width=f"{_read_val(inputs, 'val_width')*10:g}mm",
+                    height=f"{_read_val(inputs, 'val_height')*10:g}mm",
+                    side_clr=f"{_read_val(inputs, 'val_side_clear')*10:g}mm",
+                    bottom_clr=f"{_read_val(inputs, 'val_bottom_clear')*10:g}mm",
+                    end_clr=f"{_read_val(inputs, 'val_end_clear')*10:g}mm",
+                    inset=f"{_read_val(inputs, 'val_inset')*10:g}mm",
+                    start=start_mode.lower(),
+                    end=end_mode.lower(),
+                    chamfer=f"{_read_val(inputs, 'val_chamfer')*10:g}mm" if do_chamfer else False,
+                    fillet=f"{_read_val(inputs, 'val_fillet')*10:g}mm" if do_fillet else False,
+                )
+            except Exception:
+                pass  # commit logging is best-effort
         except:
             adsk.core.Application.get().userInterface.messageBox(
                 f'{CMD_NAME} failed:\n{traceback.format_exc()}')

@@ -1,15 +1,16 @@
 #!/bin/bash
-# deploy.sh — Copy Tongue & Groove add-in to Fusion 360 AddIns directory.
-# Run this from the project directory after making changes.
-# Usage: bash deploy.sh
+# deploy.sh — Helper for registering TongueGroove in Fusion 360.
 
-SRC="/Users/jesper/Projects/3Dprint/Tongue&Groove"
-DST="/Users/jesper/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/TongueGroove"
+cat <<'EOF'
+TongueGroove does not use a deploy step.
 
-echo "Deploying Tongue & Groove → TongueGroove..."
-mkdir -p "$DST"
-cp "$SRC/Tongue&Groove.py"       "$DST/TongueGroove.py"   && echo "  ✓ TongueGroove.py"
-cp "$SRC/Tongue&Groove.manifest"  "$DST/TongueGroove.manifest" && echo "  ✓ TongueGroove.manifest"
-cp "$SRC/ScriptIcon.svg"          "$DST/ScriptIcon.svg"    && echo "  ✓ ScriptIcon.svg"
-echo ""
-echo "Done. Reload in Fusion 360: Shift+S → Add-Ins → TongueGroove → toggle off/on."
+To install (first time only):
+  1. Open Fusion 360
+  2. Shift+S → Scripts and Add-Ins
+  3. Click the "+" button
+  4. Navigate to /Users/jesper/Projects/3Dprint/TongueGroove
+  5. Select the folder and click Open
+
+After that, just edit TongueGroove.py in this folder. Toggle Run off/on in
+the Scripts and Add-Ins dialog to reload after changes.
+EOF
